@@ -177,6 +177,32 @@ export function detectEmotionalState(text: string): EmotionalState {
     lower.includes("dăm bătaie")
   ) return "motivated";
 
+  if (
+  lower.includes("singur") ||
+  lower.includes("obosit") ||
+  lower.includes("pierdut") ||
+  lower.includes("trist") ||
+  lower.includes("sufer") ||
+  lower.includes("dor")
+)
+  return "sad";
+
+if (
+  lower.includes("furios") ||
+  lower.includes("nervos") ||
+  lower.includes("ură") ||
+  lower.includes("enervat")
+)
+  return "stressed";
+
+if (
+  lower.includes("iubesc") ||
+  lower.includes("te iubesc") ||
+  lower.includes("dragoste") ||
+  lower.includes("familie")
+)
+  return "loving";
+
   return "neutral";
 }
 
