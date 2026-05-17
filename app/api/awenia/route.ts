@@ -25,6 +25,7 @@ import {
   shouldCompressMemory,
   shouldKeepLongTerm,
   detectMemoryImportance,
+  detectEmotionalState,
 } from "@/app/memory-store";
 import { searchInternet } from "@/app/internet";
 import {
@@ -838,9 +839,17 @@ Answer in the same language as Gabi.
 
     const importance = detectMemoryImportance(message);
 
-    if (shouldKeepLongTerm(importance)) {
-        await saveMemory(message, reply);
+    const emotion = detectEmotionalState(message);
+
+    if (
+      shouldKeepLongTerm(importance) ||
+      emotion === "sad" ||
+      emotion === "loving" ||
+      emotion === "stressed"
+    ) {
+      await saveMemory(message, reply);
     }
+
 
     return Response.json({
       reply,
