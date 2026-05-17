@@ -21,6 +21,9 @@ import {
   getPersonalityTraits,
   createPersonalityTrait,
   increasePersonalityTrait,
+  getMemoryImportanceLabel,
+  shouldCompressMemory,
+  shouldKeepLongTerm,
 } from "@/app/memory-store";
 import { searchInternet } from "@/app/internet";
 import {
