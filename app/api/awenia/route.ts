@@ -24,6 +24,7 @@ import {
   getMemoryImportanceLabel,
   shouldCompressMemory,
   shouldKeepLongTerm,
+  detectMemoryImportance,
 } from "@/app/memory-store";
 import { searchInternet } from "@/app/internet";
 import {
@@ -835,7 +836,11 @@ Answer in the same language as Gabi.
 
     const reply = response.choices[0].message.content || "";
 
-    await saveMemory(message, reply);
+    const importance = detectMemoryImportance(message);
+
+    if (shouldKeepLongTerm(importance)) {
+        await saveMemory(message, reply);
+    }
 
     return Response.json({
       reply,
