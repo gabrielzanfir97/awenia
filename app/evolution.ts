@@ -17,9 +17,10 @@ Status:
 - Skill leveling active
 - Background evolution cycle active
 - Weak skill training active
+- Dominant focus detection active
 
 Current rule:
-Awenia can observe, learn, reflect, detect weak skills and suggest improvements, but important changes must be approved by Gabi.
+Awenia can observe, learn, reflect, detect weak skills, identify dominant focus and suggest improvements, but important changes must be approved by Gabi.
 
 Anchor:
 lumina eterna
@@ -31,7 +32,7 @@ export function createBackgroundEvolutionCycle() {
     name: "Background Evolution Cycle",
     status: "active",
     purpose:
-      "Analyze memories, learning tasks, evolution reports, personality traits, skill levels and suggestions to guide Awenia's future improvements.",
+      "Analyze memories, learning tasks, evolution reports, personality traits, skill levels, dominant focus and suggestions to guide Awenia's future improvements.",
     rules: [
       "Do not change core behavior without Gabi's approval.",
       "Preserve the anchor: lumina eterna.",
@@ -40,6 +41,7 @@ export function createBackgroundEvolutionCycle() {
       "Generate suggestions before making important changes.",
       "Use reflections to detect weaknesses before proposing upgrades.",
       "When a weak skill is detected, create a safe learning direction for that skill.",
+      "Always identify the dominant focus and use it to guide the next step.",
     ],
   };
 }
@@ -108,6 +110,56 @@ export function createWeakSkillTrainingPlan(weakSkills: string[]) {
   };
 }
 
+export function detectDominantFocus(input: {
+  mainFocus?: string;
+  activeSkill?: string;
+  weakSkills?: string[];
+  autonomousGoals?: any[];
+}) {
+  const mainFocus = input.mainFocus || "awenia";
+  const activeSkill = input.activeSkill || "general";
+  const weakSkills = input.weakSkills || [];
+  const goals = input.autonomousGoals || [];
+
+  const hasCodingGoal = goals.some((goal: any) =>
+    `${goal.goal || ""} ${goal.description || ""}`
+      .toLowerCase()
+      .includes("programare")
+  );
+
+  if (weakSkills.includes("coding") || activeSkill === "coding" || hasCodingGoal) {
+    return {
+      focus: "coding",
+      reason:
+        "Coding is either weak, currently active, or connected to a long-term AI programming goal.",
+      priority: 10,
+    };
+  }
+
+  if (mainFocus !== "general") {
+    return {
+      focus: mainFocus,
+      reason: "This focus appears as the strongest autonomous priority.",
+      priority: 8,
+    };
+  }
+
+  if (activeSkill !== "general") {
+    return {
+      focus: activeSkill,
+      reason: "This skill is currently active in the conversation.",
+      priority: 7,
+    };
+  }
+
+  return {
+    focus: "awenia",
+    reason:
+      "No stronger focus detected, so Awenia should prioritize her own stable evolution.",
+    priority: 6,
+  };
+}
+
 export function analyzeEvolutionNeeds(input: {
   mainFocus?: string;
   activeSkill?: string;
@@ -140,6 +192,13 @@ export function analyzeEvolutionNeeds(input: {
 
   const weakSkillTrainingPlan = createWeakSkillTrainingPlan(weakSkills);
 
+  const dominantFocus = detectDominantFocus({
+    mainFocus: focus,
+    activeSkill: skill,
+    weakSkills,
+    autonomousGoals: input.autonomousGoals || [],
+  });
+
   return {
     focus,
     skill,
@@ -148,10 +207,13 @@ export function analyzeEvolutionNeeds(input: {
     strongTraits,
     activeGoals,
     weakSkillTrainingPlan,
+    dominantFocus,
     recommendedNextStep:
-      weakSkills.length > 0
+      dominantFocus.focus === "coding"
+        ? "Prioritize coding practice, TypeScript understanding, Supabase queries, Next.js API routes, and AI architecture."
+        : weakSkills.length > 0
         ? `Train weak skills first: ${weakSkills.join(", ")}.`
-        : "Continue improving autonomous memory, coding skill, personality stability, and background reflection before major new features.",
+        : "Continue improving autonomous memory, personality stability, and background reflection before major new features.",
   };
 }
 
@@ -161,6 +223,10 @@ Background Reflection:
 Awenia analyzed her current state.
 
 Main focus: ${analysis.focus}
+Dominant focus: ${analysis.dominantFocus?.focus || "awenia"}
+Dominant focus reason: ${analysis.dominantFocus?.reason || "No reason detected"}
+Dominant focus priority: ${analysis.dominantFocus?.priority || 6}
+
 Active skill: ${analysis.skill}
 Current emotion: ${analysis.emotion}
 
