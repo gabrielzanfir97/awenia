@@ -496,6 +496,14 @@ Active goals: ${
 Recommended next step: ${evolutionAnalysis.recommendedNextStep}
 `;
 
+if (
+  evolutionAnalysis.weakSkills.includes("coding")
+) {
+  await createLearningTask(
+    "Practice TypeScript, Next.js API routes, Supabase queries and AI architecture.",
+    9
+  );
+}
     const formattedPersonalityTraits = personalityTraits
       .map((trait: any) => {
         return `Trait: ${trait.trait} | Score: ${trait.score} | Stable: ${
