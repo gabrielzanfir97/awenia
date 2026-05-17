@@ -111,6 +111,21 @@ export function detectMemoryImportance(text: string): number {
   return 3;
 }
 
+export function getMemoryImportanceLabel(importance: number) {
+  if (importance >= 9) return "critical_long_term";
+  if (importance >= 7) return "important";
+  if (importance >= 5) return "useful";
+  return "temporary";
+}
+
+export function shouldCompressMemory(importance: number) {
+  return importance >= 7;
+}
+
+export function shouldKeepLongTerm(importance: number) {
+  return importance >= 8;
+}
+
 export function detectEmotionalState(text: string): EmotionalState {
   const lower = text.toLowerCase();
 
