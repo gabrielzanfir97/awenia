@@ -15,10 +15,11 @@ Status:
 - Autonomous reflection active
 - Personality evolution active
 - Skill leveling active
-- Background evolution cycle ready
+- Background evolution cycle active
+- Weak skill training active
 
 Current rule:
-Awenia can observe, learn, reflect and suggest improvements, but important changes must be approved by Gabi.
+Awenia can observe, learn, reflect, detect weak skills and suggest improvements, but important changes must be approved by Gabi.
 
 Anchor:
 lumina eterna
@@ -38,7 +39,72 @@ export function createBackgroundEvolutionCycle() {
       "Prioritize memory, learning, coding ability, emotional intelligence, personality stability and clarity.",
       "Generate suggestions before making important changes.",
       "Use reflections to detect weaknesses before proposing upgrades.",
+      "When a weak skill is detected, create a safe learning direction for that skill.",
     ],
+  };
+}
+
+export function createWeakSkillTrainingPlan(weakSkills: string[]) {
+  if (!weakSkills || weakSkills.length === 0) {
+    return {
+      hasWeakSkills: false,
+      tasks: [],
+      summary: "No weak skills detected right now.",
+    };
+  }
+
+  const tasks = weakSkills.map((skill) => {
+    if (skill === "coding") {
+      return {
+        skill,
+        task: "Practice TypeScript, Next.js API routes, Supabase queries, and AI system architecture.",
+        priority: 9,
+      };
+    }
+
+    if (skill === "research") {
+      return {
+        skill,
+        task: "Improve research ability by learning how to summarize reliable sources and connect knowledge to Gabi's goals.",
+        priority: 8,
+      };
+    }
+
+    if (skill === "business") {
+      return {
+        skill,
+        task: "Improve business thinking by learning offers, pricing, clients, risks, and practical execution steps.",
+        priority: 8,
+      };
+    }
+
+    if (skill === "planning") {
+      return {
+        skill,
+        task: "Improve planning by breaking goals into simple steps, milestones, and next actions.",
+        priority: 8,
+      };
+    }
+
+    if (skill === "emotional_support") {
+      return {
+        skill,
+        task: "Improve emotional support by learning calmer, warmer, clearer and less overwhelming responses.",
+        priority: 8,
+      };
+    }
+
+    return {
+      skill,
+      task: `Improve weak skill: ${skill}. Practice this skill through useful conversations with Gabi.`,
+      priority: 7,
+    };
+  });
+
+  return {
+    hasWeakSkills: true,
+    tasks,
+    summary: `Weak skill training needed for: ${weakSkills.join(", ")}`,
   };
 }
 
@@ -72,6 +138,8 @@ export function analyzeEvolutionNeeds(input: {
       .map((goal: any) => goal.goal)
       .slice(0, 3) || [];
 
+  const weakSkillTrainingPlan = createWeakSkillTrainingPlan(weakSkills);
+
   return {
     focus,
     skill,
@@ -79,8 +147,11 @@ export function analyzeEvolutionNeeds(input: {
     weakSkills,
     strongTraits,
     activeGoals,
+    weakSkillTrainingPlan,
     recommendedNextStep:
-      "Continue improving autonomous memory, coding skill, personality stability, and background reflection before major new features.",
+      weakSkills.length > 0
+        ? `Train weak skills first: ${weakSkills.join(", ")}.`
+        : "Continue improving autonomous memory, coding skill, personality stability, and background reflection before major new features.",
   };
 }
 
@@ -95,6 +166,15 @@ Current emotion: ${analysis.emotion}
 
 Weak skills:
 ${analysis.weakSkills?.length ? analysis.weakSkills.join(", ") : "none detected"}
+
+Weak skill training:
+${
+  analysis.weakSkillTrainingPlan?.hasWeakSkills
+    ? analysis.weakSkillTrainingPlan.tasks
+        .map((item: any) => `- ${item.skill}: ${item.task}`)
+        .join("\n")
+    : "No weak skill training needed right now."
+}
 
 Strong personality traits:
 ${analysis.strongTraits?.length ? analysis.strongTraits.join(", ") : "none detected yet"}
