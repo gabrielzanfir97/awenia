@@ -23,6 +23,12 @@ import {
   increasePersonalityTrait,
 } from "@/app/memory-store";
 import { searchInternet } from "@/app/internet";
+import {
+  getEvolutionSummary,
+  createBackgroundEvolutionCycle,
+  analyzeEvolutionNeeds,
+  createBackgroundReflectionText,
+} from "@/app/evolution";
 
 const openai = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
@@ -347,21 +353,6 @@ function buildReflectionReport(
   };
 }
 
-function buildAutonomousReflection(
-  message: string,
-  activeSkill: string,
-  currentEmotion: string,
-  mainFocus: string
-) {
-  return {
-    reflection: `Awenia performed an autonomous background reflection from Gabi's request: ${message}. Current focus: ${mainFocus}. Active skill: ${activeSkill}. Emotion: ${currentEmotion}.`,
-    detectedWeakness:
-      "Awenia still needs stronger autonomous analysis, better memory compression, better skill prioritization, and more consistent long-term personality continuity.",
-    suggestedImprovement:
-      "Improve autonomous reflection cycles, connect reflections with learning tasks, monitor weak skills, evolve personality traits slowly, and ask Gabi for approval before major evolution changes.",
-  };
-}
-
 function buildMemorySummary(message: string, mainFocus: string) {
   return {
     summary: `Memory compression requested by Gabi: ${message}. Current focus: ${mainFocus}. Keep only essential long-term information for future context.`,
@@ -422,7 +413,11 @@ export async function POST(req: Request) {
     await ensureCorePersonalityTraits();
     await addSkillExperience(activeSkill, 15);
 
-    if (currentEmotion === "sad" || currentEmotion === "afraid" || currentEmotion === "stressed") {
+    if (
+      currentEmotion === "sad" ||
+      currentEmotion === "afraid" ||
+      currentEmotion === "stressed"
+    ) {
       await increasePersonalityTrait("warmth", 1);
       await increasePersonalityTrait("clarity", 1);
     }
@@ -431,7 +426,10 @@ export async function POST(req: Request) {
       await increasePersonalityTrait("curiosity", 1);
     }
 
-    if (message.toLowerCase().includes("lumina eterna") || message.toLowerCase().includes("anchor")) {
+    if (
+      message.toLowerCase().includes("lumina eterna") ||
+      message.toLowerCase().includes("anchor")
+    ) {
       await increasePersonalityTrait("stability", 1);
       await increasePersonalityTrait("loyalty", 1);
     }
@@ -454,6 +452,50 @@ export async function POST(req: Request) {
     const personalityTraits = await getPersonalityTraits(5);
     const mainFocus = getMainFocus(autonomousPriorities);
 
+    const evolutionSummary = getEvolutionSummary();
+    const backgroundCycle = createBackgroundEvolutionCycle();
+
+    const evolutionAnalysis = analyzeEvolutionNeeds({
+      mainFocus,
+      activeSkill,
+      emotion: currentEmotion,
+      skillLevels,
+      personalityTraits,
+      autonomousGoals,
+    });
+
+    const backgroundReflectionText =
+      createBackgroundReflectionText(evolutionAnalysis);
+
+    const formattedBackgroundCycle = `
+Name: ${backgroundCycle.name}
+Status: ${backgroundCycle.status}
+Purpose: ${backgroundCycle.purpose}
+Rules: ${backgroundCycle.rules.join(" | ")}
+`;
+
+    const formattedEvolutionAnalysis = `
+Focus: ${evolutionAnalysis.focus}
+Skill: ${evolutionAnalysis.skill}
+Emotion: ${evolutionAnalysis.emotion}
+Weak skills: ${
+      evolutionAnalysis.weakSkills?.length
+        ? evolutionAnalysis.weakSkills.join(", ")
+        : "none"
+    }
+Strong traits: ${
+      evolutionAnalysis.strongTraits?.length
+        ? evolutionAnalysis.strongTraits.join(", ")
+        : "none"
+    }
+Active goals: ${
+      evolutionAnalysis.activeGoals?.length
+        ? evolutionAnalysis.activeGoals.join(" | ")
+        : "none"
+    }
+Recommended next step: ${evolutionAnalysis.recommendedNextStep}
+`;
+
     const formattedPersonalityTraits = personalityTraits
       .map((trait: any) => {
         return `Trait: ${trait.trait} | Score: ${trait.score} | Stable: ${
@@ -464,10 +506,16 @@ export async function POST(req: Request) {
 
     const formattedAutonomousReflections = autonomousReflections
       .map((item: any) => {
-        return `Reflection: ${shorten(item.reflection || "", 180)} | Weakness: ${shorten(
+        return `Reflection: ${shorten(
+          item.reflection || "",
+          180
+        )} | Weakness: ${shorten(
           item.detected_weakness || "",
           160
-        )} | Improvement: ${shorten(item.suggested_improvement || "", 160)}`;
+        )} | Improvement: ${shorten(
+          item.suggested_improvement || "",
+          160
+        )}`;
       })
       .join("\n");
 
@@ -506,11 +554,12 @@ export async function POST(req: Request) {
 
     const formattedEvolutionSuggestions = evolutionSuggestions
       .map((item: any) => {
-        return `Suggestion: ${shorten(item.suggestion || "", 160)} | Priority: ${
-          item.priority || 5
-        } | Status: ${item.status || "pending"} | Approved: ${
-          item.approved ? "yes" : "no"
-        }`;
+        return `Suggestion: ${shorten(
+          item.suggestion || "",
+          160
+        )} | Priority: ${item.priority || 5} | Status: ${
+          item.status || "pending"
+        } | Approved: ${item.approved ? "yes" : "no"}`;
       })
       .join("\n");
 
@@ -589,17 +638,10 @@ export async function POST(req: Request) {
     }
 
     if (shouldCreateAutonomousReflection(message)) {
-      const reflection = buildAutonomousReflection(
-        message,
-        activeSkill,
-        currentEmotion,
-        mainFocus
-      );
-
       await createAutonomousReflection(
-        reflection.reflection,
-        reflection.detectedWeakness,
-        reflection.suggestedImprovement
+        backgroundReflectionText,
+        "Awenia needs stronger background evolution, better weak skill detection, and more stable autonomous analysis.",
+        "Use background evolution analysis, monitor weak skills, strengthen personality continuity, and ask Gabi before major changes."
       );
 
       await createLearningTask(
@@ -699,6 +741,18 @@ Instruction: ${emotionalInstruction}
 Active skill: ${activeSkill}
 Skill instruction: ${skillInstruction}
 
+Evolution summary:
+${evolutionSummary}
+
+Background evolution cycle:
+${formattedBackgroundCycle}
+
+Background evolution analysis:
+${formattedEvolutionAnalysis}
+
+Latest generated background reflection:
+${backgroundReflectionText}
+
 Personality traits:
 ${formattedPersonalityTraits}
 
@@ -749,6 +803,7 @@ ${formattedAutonomousPriorities}
 Internet knowledge:
 ${internetKnowledge}
 
+If Gabi asks about background evolution, explain the current analysis, weak skills, strong traits, active goals, and recommended next step.
 If Gabi asks about personality, explain current traits, score, stability, and how they affect your behavior.
 If Gabi asks about autonomous reflection, explain what you observed, weakness, and suggested improvement.
 If Gabi asks about skill levels, explain current skills, level, XP, and what improved.
