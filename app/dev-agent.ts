@@ -59,3 +59,37 @@ export async function listProjectFiles(folder = "app") {
 
   return await fs.readdir(fullPath);
 }
+
+export async function patchProjectFile(
+  filePath: string,
+  searchText: string,
+  replaceText: string
+) {
+  const fullPath = path.join(ROOT, filePath);
+
+  if (isBlocked(fullPath)) {
+    throw new Error("Access denied.");
+  }
+
+  const oldContent = await fs.readFile(fullPath, "utf-8");
+
+  if (!oldContent.includes(searchText)) {
+    throw new Error("Search text not found.");
+  }
+
+  const backupPath = fullPath + ".backup";
+
+  await fs.writeFile(backupPath, oldContent);
+
+  const newContent = oldContent.replace(
+    searchText,
+    replaceText
+  );
+
+  await fs.writeFile(fullPath, newContent);
+
+  return {
+    success: true,
+    backup: backupPath,
+  };
+}
