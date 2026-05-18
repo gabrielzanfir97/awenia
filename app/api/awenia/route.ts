@@ -517,6 +517,20 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const message = body.message;
+
+    if (message === "TEST_AI_KEYS") {
+  return Response.json({
+    reply:
+      "Groq: " + (process.env.GROQ_API_KEY ? "OK" : "FAIL") + "\n" +
+      "OpenRouter: " + (process.env.OPENROUTER_API_KEY ? "OK" : "FAIL") + "\n" +
+      "Gemini: " + (process.env.GEMINI_API_KEY ? "OK" : "FAIL") + "\n" +
+      "Together: " + (process.env.TOGETHER_API_KEY ? "OK" : "FAIL") + "\n" +
+      "Mistral: " + (process.env.MISTRAL_API_KEY ? "OK" : "FAIL") + "\n" +
+      "DeepSeek: " + (process.env.DEEPSEEK_API_KEY ? "OK" : "FAIL"),
+  });
+}
+
+
     if (message.startsWith("LIST_FILES")) {
   const files = await listProjectFiles();
 
