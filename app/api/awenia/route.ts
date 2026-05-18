@@ -448,47 +448,7 @@ async function callAIWithFallback(messages: any[]) {
       messages,
     });
   } catch (error) {
-    console.log("Groq failed, trying OpenRouter...");
-  }
-
-  try {
-    return await openrouter.chat.completions.create({
-      model: "openai/gpt-4o-mini",
-      max_tokens: 500,
-      messages,
-    });
-  } catch (error) {
-    console.log("OpenRouter failed, trying DeepSeek...");
-  }
-
-  try {
-    return await deepseek.chat.completions.create({
-      model: "deepseek-chat",
-      max_tokens: 500,
-      messages,
-    });
-  } catch (error) {
-    console.log("DeepSeek failed, trying Mistral...");
-  }
-
-  try {
-    return await mistral.chat.completions.create({
-      model: "mistral-small-latest",
-      max_tokens: 500,
-      messages,
-    });
-  } catch (error) {
-    console.log("Mistral failed, trying Together...");
-  }
-
-  try {
-    return await together.chat.completions.create({
-      model: "meta-llama/Llama-3.1-8B-Instruct-Turbo",
-      max_tokens: 500,
-      messages,
-    });
-  } catch (error) {
-    console.log("Together failed, trying Gemini...");
+    console.log("Groq failed, trying Gemini...");
   }
 
   const model = gemini.getGenerativeModel({
