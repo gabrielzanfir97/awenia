@@ -732,8 +732,7 @@ if (
       internetKnowledge = shorten(await searchInternet(message), 500);
     }
 
-    const response = await openai.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+    const response = await groq.chat.completions.create({  model: "llama-3.3-70b-versatile",
       max_tokens: 500,
 
       messages: [
