@@ -34,6 +34,12 @@ import {
   createBackgroundReflectionText,
 } from "@/app/evolution";
 
+import {
+  readProjectFile,
+  writeProjectFile,
+  listProjectFiles,
+} from "@/app/dev-agent";
+
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
@@ -508,6 +514,23 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const message = body.message;
+    if (message.startsWith("LIST_FILES")) {
+  const files = await listProjectFiles();
+
+  return Response.json({
+    reply: JSON.stringify(files, null, 2),
+  });
+}
+
+if (message.startsWith("READ_FILE:")) {
+  const filePath = message.replace("READ_FILE:", "").trim();
+
+  const content = await readProjectFile(filePath);
+
+  return Response.json({
+    reply: content,
+  });
+}
 
     const currentEmotion = detectCurrentEmotion(message);
     const activeSkill = detectSkill(message);
