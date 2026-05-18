@@ -532,6 +532,34 @@ if (message.startsWith("READ_FILE:")) {
   });
 }
 
+if (message.startsWith("WRITE_FILE:")) {
+  const parts = message.split("---CONTENT---");
+
+  const filePath = parts[0]
+    .replace("WRITE_FILE:", "")
+    .trim();
+
+  const content = parts[1]?.trim();
+
+  if (!filePath || !content) {
+    return Response.json({
+      reply:
+        "Format greșit. Folosește WRITE_FILE: app/file.ts ---CONTENT--- codul aici",
+    });
+  }
+
+  const result = await writeProjectFile(
+    filePath,
+    content
+  );
+
+  return Response.json({
+    reply:
+      `Fișier modificat: ${filePath}\n` +
+      `Backup: ${result.backup}`,
+  });
+}
+
     const currentEmotion = detectCurrentEmotion(message);
     const activeSkill = detectSkill(message);
     const skillInstruction = getSkillInstruction(activeSkill);
