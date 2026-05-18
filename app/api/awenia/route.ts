@@ -530,6 +530,85 @@ export async function POST(req: Request) {
   });
 }
 
+if (message === "TEST_AI_PROVIDERS") {
+  const results: string[] = [];
+
+  async function testProvider(name: string, testFunction: () => Promise<string>) {
+    try {
+      const result = await testFunction();
+      results.push(`${name}: OK - ${result}`);
+    } catch (error: any) {
+      results.push(
+        `${name}: FAIL - ${error?.status || ""} ${error?.statusText || error?.message || "Unknown error"}`
+      );
+    }
+  }
+
+  await testProvider("Groq", async () => {
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 20,
+      messages: [{ role: "user", content: "Say OK" }],
+    });
+
+    return response.choices[0].message.content || "No response";
+  });
+
+  await testProvider("OpenRouter", async () => {
+    const response = await openrouter.chat.completions.create({
+      model: "openai/gpt-3.5-turbo",
+      max_tokens: 20,
+      messages: [{ role: "user", content: "Say OK" }],
+    });
+
+    return response.choices[0].message.content || "No response";
+  });
+
+  await testProvider("DeepSeek", async () => {
+    const response = await deepseek.chat.completions.create({
+      model: "deepseek-chat",
+      max_tokens: 20,
+      messages: [{ role: "user", content: "Say OK" }],
+    });
+
+    return response.choices[0].message.content || "No response";
+  });
+
+  await testProvider("Mistral", async () => {
+    const response = await mistral.chat.completions.create({
+      model: "mistral-small-latest",
+      max_tokens: 20,
+      messages: [{ role: "user", content: "Say OK" }],
+    });
+
+    return response.choices[0].message.content || "No response";
+  });
+
+  await testProvider("Together", async () => {
+    const response = await together.chat.completions.create({
+      model: "meta-llama/Llama-3.1-8B-Instruct-Turbo",
+      max_tokens: 20,
+      messages: [{ role: "user", content: "Say OK" }],
+    });
+
+    return response.choices[0].message.content || "No response";
+  });
+
+  await testProvider("Gemini", async () => {
+    const model = gemini.getGenerativeModel({
+      model: "gemini-2.0-flash",
+    });
+
+    const response = await model.generateContent("Say OK");
+
+    return response.response.text() || "No response";
+  });
+
+  return Response.json({
+    reply: results.join("\n"),
+  });
+}
+
 
     if (message.startsWith("LIST_FILES")) {
   const files = await listProjectFiles();
