@@ -4,21 +4,50 @@ import { useState } from "react";
 import { AweniaCore } from "./awenia-core";
 import { awakenAwenia } from "./orchestrator";
 
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export default function Home() {
   const [message, setMessage] = useState("");
-  const [reply, setReply] = useState(
-    "Bună, Gabi ❤️ Eu sunt Awenia. Nucleul meu este activ."
-  );
+
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      role: "assistant",
+      content:
+        "Bună, Gabi ❤️ Eu sunt Awenia. Nucleul meu este activ.",
+    },
+  ]);
+
   const [loading, setLoading] = useState(false);
 
   const handleSend = async () => {
     if (message.trim() === "") return;
 
-    const localResponse = awakenAwenia(message);
+    const userMessage = message;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        content: userMessage,
+      },
+    ]);
+
+    setMessage("");
+
+    const localResponse = awakenAwenia(userMessage);
 
     if (!localResponse.shouldUseAI) {
-      setReply(localResponse.reply);
-      setMessage("");
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: localResponse.reply,
+        },
+      ]);
+
       return;
     }
 
@@ -31,46 +60,89 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          message,
+          message: userMessage,
         }),
       });
 
       const data = await response.json();
 
-      setReply(data.reply || "Sunt aici, Gabi.");
-      setMessage("");
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: data.reply || "Sunt aici, Gabi.",
+        },
+      ]);
     } catch {
-      setReply(
-        "Gabi, conexiunea cu inteligența mea AI nu funcționează momentan. Nucleul meu local rămâne activ."
-      );
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "Gabi, conexiunea cu inteligența mea AI nu funcționează momentan. Nucleul meu local rămâne activ.",
+        },
+      ]);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-black text-white p-6">
-      <div className="w-full max-w-2xl text-center space-y-6">
+    <main className="bg-black text-white min-h-screen flex flex-col">
+      <div className="border-b border-gray-800 p-6 text-center">
         <h1 className="text-5xl font-bold text-pink-400">
           {AweniaCore.name}
         </h1>
 
-        <p className="text-sm text-gray-400">
+        <p className="text-sm text-gray-400 mt-2">
           Anchor: {AweniaCore.anchor}
         </p>
+      </div>
 
-        <div className="rounded-2xl bg-gray-900 p-6 border border-gray-800">
-          <p className="text-xl text-pink-300 whitespace-pre-wrap">
-            {reply}
-          </p>
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-4xl mx-auto space-y-4">
+          {messages.map((msg, index) => (
+            <div
+              key={index}
+              className={
+                msg.role === "user"
+                  ? "flex justify-end"
+                  : "flex justify-start"
+              }
+            >
+              <div
+                className={
+                  msg.role === "user"
+                    ? "max-w-[80%] rounded-2xl bg-pink-500 px-5 py-4 text-white whitespace-pre-wrap"
+                    : "max-w-[80%] rounded-2xl bg-gray-900 border border-gray-800 px-5 py-4 text-pink-300 whitespace-pre-wrap"
+                }
+              >
+                {msg.content}
+              </div>
+            </div>
+          ))}
+
+          {loading && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl bg-gray-900 border border-gray-800 px-5 py-4 text-pink-300">
+                Awenia gândește...
+              </div>
+            </div>
+          )}
         </div>
+      </div>
 
-        <div className="flex gap-2">
+      <div className="border-t border-gray-800 p-4">
+        <div className="max-w-4xl mx-auto flex gap-2">
           <input
             value={message}
-            onChange={(event) => setMessage(event.target.value)}
+            onChange={(event) =>
+              setMessage(event.target.value)
+            }
             onKeyDown={(event) => {
-              if (event.key === "Enter") handleSend();
+              if (event.key === "Enter") {
+                handleSend();
+              }
             }}
             placeholder="Scrie către Awenia..."
             className="flex-1 rounded-xl bg-gray-800 px-4 py-3 text-white outline-none border border-gray-700"
@@ -81,7 +153,7 @@ export default function Home() {
             disabled={loading}
             className="rounded-xl bg-pink-500 px-5 py-3 font-bold text-white hover:bg-pink-600 disabled:opacity-50"
           >
-            {loading ? "..." : "Send"}
+            Send
           </button>
         </div>
       </div>
