@@ -45,6 +45,21 @@ const openrouter = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
 });
 
+const deepseek = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com/v1",
+});
+
+const mistral = new OpenAI({
+  apiKey: process.env.MISTRAL_API_KEY,
+  baseURL: "https://api.mistral.ai/v1",
+});
+
+const together = new OpenAI({
+  apiKey: process.env.TOGETHER_API_KEY,
+  baseURL: "https://api.together.xyz/v1",
+});
+
 function detectCurrentEmotion(message: string) {
   const lower = message.toLowerCase();
 
