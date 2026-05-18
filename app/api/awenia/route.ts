@@ -41,6 +41,8 @@ import {
   patchProjectFile,
 } from "@/app/dev-agent";
 
+import { ProjectMap } from "@/app/project-map";
+
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
