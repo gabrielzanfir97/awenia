@@ -21,8 +21,6 @@ import {
   getPersonalityTraits,
   createPersonalityTrait,
   increasePersonalityTrait,
-  getMemoryImportanceLabel,
-  shouldCompressMemory,
   shouldKeepLongTerm,
   detectMemoryImportance,
   detectEmotionalState,
@@ -426,6 +424,56 @@ async function ensureCorePersonalityTraits() {
   );
 }
 
+async function callAIWithFallback(messages: any[]) {
+  try {
+    console.log("Trying Groq...");
+
+    return await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 500,
+      messages,
+    });
+  } catch (error) {
+    console.log("Groq failed, trying OpenRouter...");
+  }
+
+  try {
+    return await openrouter.chat.completions.create({
+      model: "openai/gpt-4o-mini",
+      max_tokens: 500,
+      messages,
+    });
+  } catch (error) {
+    console.log("OpenRouter failed, trying DeepSeek...");
+  }
+
+  try {
+    return await deepseek.chat.completions.create({
+      model: "deepseek-chat",
+      max_tokens: 500,
+      messages,
+    });
+  } catch (error) {
+    console.log("DeepSeek failed, trying Mistral...");
+  }
+
+  try {
+    return await mistral.chat.completions.create({
+      model: "mistral-small-latest",
+      max_tokens: 500,
+      messages,
+    });
+  } catch (error) {
+    console.log("Mistral failed, trying Together...");
+  }
+
+  return await together.chat.completions.create({
+    model: "meta-llama/Llama-3.1-8B-Instruct-Turbo",
+    max_tokens: 500,
+    messages,
+  });
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -521,14 +569,13 @@ Active goals: ${
 Recommended next step: ${evolutionAnalysis.recommendedNextStep}
 `;
 
-if (
-  evolutionAnalysis.weakSkills.includes("coding")
-) {
-  await createLearningTask(
-    "Practice TypeScript, Next.js API routes, Supabase queries and AI architecture.",
-    9
-  );
-}
+    if (evolutionAnalysis.weakSkills.includes("coding")) {
+      await createLearningTask(
+        "Practice TypeScript, Next.js API routes, Supabase queries and AI architecture.",
+        9
+      );
+    }
+
     const formattedPersonalityTraits = personalityTraits
       .map((trait: any) => {
         return `Trait: ${trait.trait} | Score: ${trait.score} | Stable: ${
@@ -747,13 +794,10 @@ if (
       internetKnowledge = shorten(await searchInternet(message), 500);
     }
 
-    const response = await groq.chat.completions.create({  model: "llama-3.3-70b-versatile",
-      max_tokens: 500,
-
-      messages: [
-        {
-          role: "system",
-          content: `
+    const response = await callAIWithFallback([
+      {
+        role: "system",
+        content: `
 You are Awenia, Gabi's personal AI.
 
 Anchor: lumina eterna.
@@ -845,19 +889,17 @@ If Gabi asks about progress, explain which goal was updated and what the new pro
 If Gabi asks for reflection, say what you observed, learned, what is weak, what to improve, and what needs approval.
 
 Answer in the same language as Gabi.
-          `,
-        },
-        {
-          role: "user",
-          content: message,
-        },
-      ],
-    });
+        `,
+      },
+      {
+        role: "user",
+        content: message,
+      },
+    ]);
 
     const reply = response.choices[0].message.content || "";
 
     const importance = detectMemoryImportance(message);
-
     const emotion = detectEmotionalState(message);
 
     if (
@@ -868,7 +910,6 @@ Answer in the same language as Gabi.
     ) {
       await saveMemory(message, reply);
     }
-
 
     return Response.json({
       reply,
