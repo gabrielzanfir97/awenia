@@ -38,6 +38,7 @@ import {
   readProjectFile,
   writeProjectFile,
   listProjectFiles,
+  patchProjectFile,
 } from "@/app/dev-agent";
 
 const groq = new OpenAI({
@@ -556,6 +557,46 @@ if (message.startsWith("WRITE_FILE:")) {
   return Response.json({
     reply:
       `Fișier modificat: ${filePath}\n` +
+      `Backup: ${result.backup}`,
+  });
+}
+
+if (message.startsWith("PATCH_FILE:")) {
+  const parts = message.split("---SEARCH---");
+
+  const filePath = parts[0]
+    .replace("PATCH_FILE:", "")
+    .trim();
+
+  const searchAndReplace =
+    parts[1]?.split("---REPLACE---");
+
+  const searchText =
+    searchAndReplace?.[0]?.trim();
+
+  const replaceText =
+    searchAndReplace?.[1]?.trim();
+
+  if (
+    !filePath ||
+    !searchText ||
+    !replaceText
+  ) {
+    return Response.json({
+      reply:
+        "Format greșit pentru PATCH_FILE.",
+    });
+  }
+
+  const result = await patchProjectFile(
+    filePath,
+    searchText,
+    replaceText
+  );
+
+  return Response.json({
+    reply:
+      `Patch aplicat: ${filePath}\n` +
       `Backup: ${result.backup}`,
   });
 }
