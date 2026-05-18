@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   saveMemory,
   getRelevantMemories,
@@ -57,6 +58,10 @@ const together = new OpenAI({
   apiKey: process.env.TOGETHER_API_KEY,
   baseURL: "https://api.together.xyz/v1",
 });
+
+const gemini = new GoogleGenerativeAI(
+  process.env.GEMINI_API_KEY || ""
+);
 
 function detectCurrentEmotion(message: string) {
   const lower = message.toLowerCase();
@@ -467,11 +472,36 @@ async function callAIWithFallback(messages: any[]) {
     console.log("Mistral failed, trying Together...");
   }
 
-  return await together.chat.completions.create({
-    model: "meta-llama/Llama-3.1-8B-Instruct-Turbo",
-    max_tokens: 500,
-    messages,
+  try {
+    return await together.chat.completions.create({
+      model: "meta-llama/Llama-3.1-8B-Instruct-Turbo",
+      max_tokens: 500,
+      messages,
+    });
+  } catch (error) {
+    console.log("Together failed, trying Gemini...");
+  }
+
+  const model = gemini.getGenerativeModel({
+    model: "gemini-1.5-flash",
   });
+
+  const prompt = messages
+    .map((m: any) => `${m.role}: ${m.content}`)
+    .join("\n");
+
+  const result = await model.generateContent(prompt);
+  const text = result.response.text();
+
+  return {
+    choices: [
+      {
+        message: {
+          content: text,
+        },
+      },
+    ],
+  };
 }
 
 export async function POST(req: Request) {
