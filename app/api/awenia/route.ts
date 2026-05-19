@@ -420,6 +420,15 @@ async function ensureCorePersonalityTraits() {
   );
 }
 
+function createCodeSummary(content: string) {
+  const lines = content.split("\n").slice(0, 20);
+
+  return (
+    "Code summary:\n" +
+    lines.join("\n").slice(0, 800)
+  );
+}
+
 async function callAIWithFallback(messages: any[]) {
   try {
     console.log("Trying Groq...");
