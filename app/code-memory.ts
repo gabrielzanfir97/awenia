@@ -90,3 +90,41 @@ export function createCodeSummary(content: string) {
     cleaned.slice(-250)
   );
 }
+
+export function detectFilePurpose(
+  filePath: string,
+  content: string
+) {
+  const lowerPath = filePath.toLowerCase();
+  const lowerContent = content.toLowerCase();
+
+  if (lowerPath.includes("route")) {
+    return "API route handler";
+  }
+
+  if (lowerPath.includes("page")) {
+    return "Frontend page";
+  }
+
+  if (lowerPath.includes("memory")) {
+    return "Memory system";
+  }
+
+  if (lowerPath.includes("embedding")) {
+    return "Semantic embedding system";
+  }
+
+  if (lowerPath.includes("evolution")) {
+    return "Evolution and self-improvement system";
+  }
+
+  if (lowerContent.includes("supabase")) {
+    return "Supabase integration";
+  }
+
+  if (lowerContent.includes("openai")) {
+    return "AI provider integration";
+  }
+
+  return "General project file";
+}
