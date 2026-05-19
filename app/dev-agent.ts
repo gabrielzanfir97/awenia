@@ -8,6 +8,7 @@ const BLOCKED = [
   ".env.local",
   ".git",
   "node_modules",
+  "app/protected-core.ts",
 ];
 
 function isBlocked(target: string) {
