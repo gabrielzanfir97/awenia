@@ -493,6 +493,18 @@ if (message.startsWith("SEARCH_CODE_MEMORY:")) {
 if (message.startsWith("READ_FILE:")) {
   const filePath = message.replace("READ_FILE:", "").trim();
 
+  const memoryResults = await searchCodeMemory(filePath);
+
+if (memoryResults && memoryResults.length > 0) {
+  const memory = memoryResults[0];
+
+  return Response.json({
+    reply:
+      "Am găsit fișierul în memoria de cod:\n\n" +
+      JSON.stringify(memory, null, 2),
+  });
+}
+
   const content = await readProjectFile(filePath);
   await saveCodeMemory({
   file_path: filePath,
