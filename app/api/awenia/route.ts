@@ -945,6 +945,7 @@ Developer mode:
   3. why that file is responsible,
   4. what patch should be applied.
 - Only after Gabi approves, generate the PATCH_FILE command.
+- If Gabi replies with "da", "yes", "approved", or "ok", continue directly with the PATCH_FILE operation without asking again.
 - Prefer PATCH_FILE over WRITE_FILE.
 - Never overwrite a full file unless Gabi explicitly approves.
 - Never modify .env, .env.local, .git, or node_modules.
