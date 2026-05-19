@@ -1090,6 +1090,29 @@ Answer in the same language as Gabi.
     ]);
 
     const reply = response.choices[0].message.content || "";
+    const codeBlockMatch = reply.match(/```(?:typescript|ts|javascript|js)?\n([\s\S]*?)```/);
+const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
+
+if (
+  codeBlockMatch &&
+  fileMatch &&
+  (
+    reply.includes("WRITE_FILE") ||
+    reply.toLowerCase().includes("creează") ||
+    reply.toLowerCase().includes("creez") ||
+    reply.toLowerCase().includes("create")
+  )
+) {
+  const detectedFilePath = fileMatch[1].startsWith("app/")
+    ? fileMatch[1]
+    : `app/${fileMatch[1]}`;
+
+  await savePendingAction({
+    action_type: "WRITE_FILE",
+    file_path: detectedFilePath,
+    content: codeBlockMatch[1].trim(),
+  });
+}
 
     const importance = detectMemoryImportance(message);
     const emotion = detectEmotionalState(message);
