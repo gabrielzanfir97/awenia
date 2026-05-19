@@ -128,3 +128,26 @@ export function detectFilePurpose(
 
   return "General project file";
 }
+
+export function createSmartCodeSummary(
+  filePath: string,
+  content: string
+) {
+  const purpose = detectFilePurpose(filePath, content);
+
+  const cleaned = content
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const shortContent =
+    cleaned.length > 400
+      ? cleaned.slice(0, 400) + "..."
+      : cleaned;
+
+  return `
+Purpose: ${purpose}
+
+Main logic:
+${shortContent}
+  `.trim();
+}
