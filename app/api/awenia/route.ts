@@ -45,6 +45,7 @@ import { ProjectMap } from "@/app/project-map";
 
 import { saveCodeMemory, searchCodeMemory } from "@/app/code-memory";
 import { saveCodeEmbedding } from "@/app/embeddings";
+import { runOmniscientCognition } from "@/app/omniscient-cognition";
 
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
