@@ -43,7 +43,7 @@ import {
 
 import { ProjectMap } from "@/app/project-map";
 
-import { saveCodeMemory } from "@/app/code-memory";
+import { saveCodeMemory, searchCodeMemory } from "@/app/code-memory";
 
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
