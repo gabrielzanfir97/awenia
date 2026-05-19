@@ -598,6 +598,8 @@ await saveCodeMemory({
   last_known_content: updatedContent.slice(0, 3000),
 });
 
+  await saveCodeEmbedding(filePath, updatedContent);
+
   return Response.json({
     reply:
       `Patch aplicat: ${filePath}\n` +
