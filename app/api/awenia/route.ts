@@ -476,12 +476,42 @@ export async function POST(req: Request) {
     const body = await req.json();
     const message = body.message;
 
-  if (message === "AWENIA_STATUS") {
-  const status =
+   if (message === "AWENIA_STATUS") {
+   const status =
     await runOmniscientCognition();
 
-  return Response.json({
+   return Response.json({
     reply: JSON.stringify(status, null, 2),
+  });
+}
+
+if (
+  message.toLowerCase() === "ok" ||
+  message.toLowerCase() === "yes" ||
+  message.toLowerCase() === "approved" ||
+  message.toLowerCase() === "da"
+) {
+  const pending =
+    await getLatestPendingAction();
+
+  if (!pending) {
+    return Response.json({
+      reply: "No pending actions found.",
+    });
+  }
+
+  if (pending.action_type === "WRITE_FILE") {
+    await writeProjectFile(
+      pending.file_path,
+      pending.content
+    );
+  }
+
+  await completePendingAction(pending.id);
+
+  return Response.json({
+    reply:
+      "Pending action executed successfully.",
   });
 }
 
