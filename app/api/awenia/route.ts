@@ -510,7 +510,7 @@ if (memoryResults && memoryResults.length > 0) {
   file_path: filePath,
   file_purpose: "Project source file",
   code_summary: content.slice(0, 500),
-  last_known_content: content,
+  last_known_content: content.slice(0, 3000),
 });
 
   return Response.json({
