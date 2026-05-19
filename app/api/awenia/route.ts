@@ -461,34 +461,32 @@ export async function POST(req: Request) {
     const message = body.message;
 
     if (message === "TEST_AI_KEYS") {
-  return Response.json({
-    reply:
-      "Groq: " + (process.env.GROQ_API_KEY ? "OK" : "FAIL") + "\n" +
-      "OpenRouter: " + (process.env.OPENROUTER_API_KEY ? "OK" : "FAIL") + "\n" +
-      "Gemini: " + (process.env.GEMINI_API_KEY ? "OK" : "FAIL") + "\n" +
-      "Together: " + (process.env.TOGETHER_API_KEY ? "OK" : "FAIL") + "\n" +
-      "Mistral: " + (process.env.MISTRAL_API_KEY ? "OK" : "FAIL") + "\n" +
-      "DeepSeek: " + (process.env.DEEPSEEK_API_KEY ? "OK" : "FAIL"),
-  });
-}
+      return Response.json({
+        reply:
+          "Groq: " + (process.env.GROQ_API_KEY ? "OK" : "FAIL") + "\n" +
+          "Gemini: " + (process.env.GEMINI_API_KEY ? "OK" : "FAIL"),
+      });
+    }
 
     if (message.startsWith("LIST_FILES")) {
-  const files = await listProjectFiles();
+      const files = await listProjectFiles();
 
-  return Response.json({
-    reply: JSON.stringify(files, null, 2),
-  });
-}
+      return Response.json({
+        reply: JSON.stringify(files, null, 2),
+      });
+    }
 
-if (message.startsWith("SEARCH_CODE_MEMORY:")) {
-  const query = message.replace("SEARCH_CODE_MEMORY:", "").trim();
+    if (message.startsWith("SEARCH_CODE_MEMORY:")) {
+      const query = message
+        .replace("SEARCH_CODE_MEMORY:", "")
+        .trim();
 
-  const results = await searchCodeMemory(query);
+      const results = await searchCodeMemory(query);
 
-  return Response.json({
-    reply: JSON.stringify(results, null, 2),
-  });
-}
+      return Response.json({
+        reply: JSON.stringify(results, null, 2),
+      });
+    }
 
 if (message.startsWith("READ_FILE:")) {
   const filePath = message.replace("READ_FILE:", "").trim();
