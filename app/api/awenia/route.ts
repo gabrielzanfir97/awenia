@@ -939,6 +939,12 @@ Developer mode:
 - Use ProjectMap to understand which file is responsible for UI, API, memory, evolution, internet, core, and development tools.
 - Use ProjectMap to understand which file is responsible for UI, API, memory, evolution, internet, core, and development tools.
 - If Gabi asks for a coding change, first identify the correct file.
+- Before generating a PATCH_FILE, first explain:
+  1. what the problem is,
+  2. which file should be modified,
+  3. why that file is responsible,
+  4. what patch should be applied.
+- Only after Gabi approves, generate the PATCH_FILE command.
 - Prefer PATCH_FILE over WRITE_FILE.
 - Never overwrite a full file unless Gabi explicitly approves.
 - Never modify .env, .env.local, .git, or node_modules.
