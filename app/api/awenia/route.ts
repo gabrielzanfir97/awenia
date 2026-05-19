@@ -578,6 +578,15 @@ if (message.startsWith("PATCH_FILE:")) {
     replaceText
   );
 
+  const updatedContent = await readProjectFile(filePath);
+
+await saveCodeMemory({
+  file_path: filePath,
+  file_purpose: "Patched project file",
+  code_summary: "Updated after PATCH_FILE",
+  last_known_content: updatedContent.slice(0, 3000),
+});
+
   return Response.json({
     reply:
       `Patch aplicat: ${filePath}\n` +
