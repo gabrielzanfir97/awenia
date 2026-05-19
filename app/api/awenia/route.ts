@@ -471,6 +471,15 @@ export async function POST(req: Request) {
     const body = await req.json();
     const message = body.message;
 
+  if (message === "AWENIA_STATUS") {
+  const status =
+    await runOmniscientCognition();
+
+  return Response.json({
+    reply: JSON.stringify(status, null, 2),
+  });
+}
+
     if (message === "TEST_AI_KEYS") {
       return Response.json({
         reply:
