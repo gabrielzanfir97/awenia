@@ -44,6 +44,7 @@ import {
 import { ProjectMap } from "@/app/project-map";
 
 import { saveCodeMemory, searchCodeMemory } from "@/app/code-memory";
+import { saveCodeEmbedding } from "@/app/embeddings";
 
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
@@ -519,6 +520,8 @@ if (memoryResults && memoryResults.length > 0) {
   code_summary: createCodeSummary(content),
   last_known_content: content.slice(0, 3000),
 });
+
+  await saveCodeEmbedding(filePath, content);
 
   return Response.json({
     reply: content,
