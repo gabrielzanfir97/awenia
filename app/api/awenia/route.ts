@@ -484,6 +484,12 @@ if (message.startsWith("READ_FILE:")) {
   const filePath = message.replace("READ_FILE:", "").trim();
 
   const content = await readProjectFile(filePath);
+  await saveCodeMemory({
+  file_path: filePath,
+  file_purpose: "Project source file",
+  code_summary: content.slice(0, 500),
+  last_known_content: content,
+});
 
   return Response.json({
     reply: content,
