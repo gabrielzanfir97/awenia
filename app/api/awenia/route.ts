@@ -516,8 +516,7 @@ if (memoryResults && memoryResults.length > 0) {
   await saveCodeMemory({
   file_path: filePath,
   file_purpose: "Project source file",
-  code_summary:
-  "Auto summary pending for: " + filePath,
+  code_summary: createCodeSummary(content),
   last_known_content: content.slice(0, 3000),
 });
 
