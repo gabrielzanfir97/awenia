@@ -480,6 +480,16 @@ export async function POST(req: Request) {
   });
 }
 
+if (message.startsWith("SEARCH_CODE_MEMORY:")) {
+  const query = message.replace("SEARCH_CODE_MEMORY:", "").trim();
+
+  const results = await searchCodeMemory(query);
+
+  return Response.json({
+    reply: JSON.stringify(results, null, 2),
+  });
+}
+
 if (message.startsWith("READ_FILE:")) {
   const filePath = message.replace("READ_FILE:", "").trim();
 
