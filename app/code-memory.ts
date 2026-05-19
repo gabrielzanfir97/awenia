@@ -74,3 +74,19 @@ export async function searchCodeMemory(query: string) {
 
   return data;
 }
+
+export function createCodeSummary(content: string) {
+  const cleaned = content
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleaned.length <= 500) {
+    return cleaned;
+  }
+
+  return (
+    cleaned.slice(0, 250) +
+    "\n...\n" +
+    cleaned.slice(-250)
+  );
+}
