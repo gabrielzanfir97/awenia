@@ -56,6 +56,11 @@ import {
   getRecentChatHistory,
 } from "@/app/chat-history";
 
+import {
+  savePermanentMemory,
+  getPermanentMemories,
+} from "@/app/permanent-memory";
+
 import { runOmniscientCognition } from "@/app/omniscient-cognition";
 
 const groq = new OpenAI({
@@ -704,6 +709,7 @@ await saveCodeMemory({
 
     const relevantMemories = await getRelevantMemories(message, 3);
     const memorySummaries = await getMemorySummaries(3);
+    const permanentMemories = await getPermanentMemories(10);
     const learningTasks = await getLearningTasks(2);
     const evolutionSuggestions = await getEvolutionSuggestions(2);
     const evolutionReports = await getEvolutionReports(1);
