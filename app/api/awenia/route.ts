@@ -75,6 +75,8 @@ import { coordinateAgents } from "@/app/agent-orchestrator";
 
 import { adaptSystemBehavior } from "@/app/adaptive-intelligence";
 
+import { makeAutonomousDecision } from "@/app/decision-engine";
+
 import { analyzeError } from "@/app/self-debug";
 
 import { generatePatch } from "@/app/patch-generator";
@@ -509,116 +511,116 @@ export async function POST(req: Request) {
     const body = await req.json();
     const message = body.message;
 
-   if (message === "AWENIA_STATUS") {
-   const status =
-    await runOmniscientCognition();
+    if (message === "AWENIA_STATUS") {
+      const status =
+        await runOmniscientCognition();
 
-   return Response.json({
-    reply: JSON.stringify(status, null, 2),
-  });
-}
+      return Response.json({
+        reply: JSON.stringify(status, null, 2),
+      });
+    }
 
-if (message.startsWith("TASK_PLAN:")) {
-  const task = message
-    .replace("TASK_PLAN:", "")
-    .trim();
+    if (message.startsWith("TASK_PLAN:")) {
+      const task = message
+        .replace("TASK_PLAN:", "")
+        .trim();
 
-  const plan = await createTaskPlan(task);
+      const plan = await createTaskPlan(task);
 
-  return Response.json({
-    reply: JSON.stringify(plan, null, 2),
-  });
-}
+      return Response.json({
+        reply: JSON.stringify(plan, null, 2),
+      });
+    }
 
-if (message.startsWith("DEBUG_ERROR:")) {
-  const errorText = message
-    .replace("DEBUG_ERROR:", "")
-    .trim();
+    if (message.startsWith("DEBUG_ERROR:")) {
+      const errorText = message
+        .replace("DEBUG_ERROR:", "")
+        .trim();
 
-  const analysis = analyzeError(errorText);
+      const analysis = analyzeError(errorText);
 
-  return Response.json({
-    reply: JSON.stringify(analysis, null, 2),
-  });
-}
+      return Response.json({
+        reply: JSON.stringify(analysis, null, 2),
+      });
+    }
 
-if (message.startsWith("GENERATE_PATCH:")) {
-  const parts = message.split("---");
+    if (message.startsWith("GENERATE_PATCH:")) {
+      const parts = message.split("---");
 
-  const filePath = parts[1]?.trim();
-  const searchText = parts[2]?.trim();
-  const replaceText = parts[3]?.trim();
+      const filePath = parts[1]?.trim();
+      const searchText = parts[2]?.trim();
+      const replaceText = parts[3]?.trim();
 
-  if (!filePath || !searchText || !replaceText) {
-    return Response.json({
-      reply:
-        "Format: GENERATE_PATCH: --- filePath --- searchText --- replaceText",
-    });
-  }
+      if (!filePath || !searchText || !replaceText) {
+        return Response.json({
+          reply:
+            "Format: GENERATE_PATCH: --- filePath --- searchText --- replaceText",
+        });
+      }
 
-  const patch = generatePatch(
-    filePath,
-    searchText,
-    replaceText
-  );
+      const patch = generatePatch(
+        filePath,
+        searchText,
+        replaceText
+      );
 
-  return Response.json({
-    reply: patch,
-  });
-}
+      return Response.json({
+        reply: patch,
+      });
+    }
 
-if (message.startsWith("ROLLBACK_FILE:")) {
-  const filePath = message
-    .replace("ROLLBACK_FILE:", "")
-    .trim();
+    if (message.startsWith("ROLLBACK_FILE:")) {
+      const filePath = message
+        .replace("ROLLBACK_FILE:", "")
+        .trim();
 
-  const result = await rollbackFile(
-  filePath,
-  filePath
-);
+      const result = await rollbackFile(
+        filePath,
+        filePath
+      );
 
-  return Response.json({
-    reply: JSON.stringify(result, null, 2),
-  });
-}
+      return Response.json({
+        reply: JSON.stringify(result, null, 2),
+      });
+    }
 
-if (message === "RUN_BACKGROUND_WORKER") {
-  const result = await runBackgroundWorker();
+    if (message === "RUN_BACKGROUND_WORKER") {
+      const result = await runBackgroundWorker();
 
-  return Response.json({
-    reply: JSON.stringify(result, null, 2),
-  });
-}
+      return Response.json({
+        reply: JSON.stringify(result, null, 2),
+      });
+    }
 
-if (
-  message.toLowerCase() === "ok" ||
-  message.toLowerCase() === "yes" ||
-  message.toLowerCase() === "approved" ||
-  message.toLowerCase() === "da"
-) {
-  const pending =
-    await getLatestPendingAction();
+    if (
+      message.toLowerCase() === "ok" ||
+      message.toLowerCase() === "yes" ||
+      message.toLowerCase() === "approved" ||
+      message.toLowerCase() === "da"
+    ) {
+      const pending =
+        await getLatestPendingAction();
 
-  if (!pending) {
-    return Response.json({
-      reply: "No pending actions found.",
-    });
-  }
+      if (!pending) {
+        return Response.json({
+          reply: "No pending actions found.",
+        });
+      }
 
-  if (pending.action_type === "WRITE_FILE") {
-    await writeProjectFile(
-      pending.file_path,
-      pending.content
-    );
-  }
+      if (pending.action_type === "WRITE_FILE") {
+        await writeProjectFile(
+          pending.file_path,
+          pending.content
+        );
+      }
 
-  await completePendingAction(pending.id);
+      await completePendingAction(pending.id);
 
-  return Response.json({
-    reply:
-      "Pending action executed successfully.",
-  });
-}
+      return Response.json({
+        reply:
+          "Pending action executed successfully.",
+      });
+    }
 
     if (message === "TEST_AI_KEYS") {
       return Response.json({
@@ -649,143 +651,143 @@ if (
     }
 
     if (message.startsWith("READ_REAL_FILE:")) {
-  const filePath = message.replace("READ_REAL_FILE:", "").trim();
+      const filePath = message.replace("READ_REAL_FILE:", "").trim();
 
-  const content = await readProjectFile(filePath);
+      const content = await readProjectFile(filePath);
 
-  await saveCodeMemory({
-  file_path: filePath,
-  file_purpose: detectFilePurpose(filePath, content),
-  code_summary: createSmartCodeSummary(filePath, content),
-  last_known_content: content.slice(0, 12000),
-});
+      await saveCodeMemory({
+        file_path: filePath,
+        file_purpose: detectFilePurpose(filePath, content),
+        code_summary: createSmartCodeSummary(filePath, content),
+        last_known_content: content.slice(0, 12000),
+      });
 
-  return Response.json({
-    reply: content,
-  });
-}
+      return Response.json({
+        reply: content,
+      });
+    }
 
-if (message.startsWith("READ_FILE:")) {
-  const filePath = message.replace("READ_FILE:", "").trim();
+    if (message.startsWith("READ_FILE:")) {
+      const filePath = message.replace("READ_FILE:", "").trim();
 
-  const memoryResults = await searchCodeMemory(filePath);
+      const memoryResults = await searchCodeMemory(filePath);
 
-  const allCodeMemories = await getAllCodeMemories();
+      const allCodeMemories = await getAllCodeMemories();
 
-if (memoryResults && memoryResults.length > 0) {
-  const memory = memoryResults[0];
+      if (memoryResults && memoryResults.length > 0) {
+        const memory = memoryResults[0];
 
-  return Response.json({
-  reply:
-    "Am găsit fișierul în memoria de cod:\n\n" +
-    JSON.stringify(memory, null, 2) +
-    "\n\nProject code memory overview:\n\n" +
-    JSON.stringify(
-      allCodeMemories.map((item: any) => ({
-        file_path: item.file_path,
-        file_purpose: item.file_purpose,
-        code_summary: item.code_summary,
-        important_functions: item.important_functions,
-      })),
-      null,
-      2
-    ),
- });
-}
+        return Response.json({
+          reply:
+            "Am găsit fișierul în memoria de cod:\n\n" +
+            JSON.stringify(memory, null, 2) +
+            "\n\nProject code memory overview:\n\n" +
+            JSON.stringify(
+              allCodeMemories.map((item: any) => ({
+                file_path: item.file_path,
+                file_purpose: item.file_purpose,
+                code_summary: item.code_summary,
+                important_functions: item.important_functions,
+              })),
+              null,
+              2
+            ),
+        });
+      }
 
-  const content = await readProjectFile(filePath);
-  await saveCodeMemory({
-  file_path: filePath,
-  file_purpose: "Project source file",
-  code_summary: createCodeSummary(content),
-  last_known_content: content.slice(0, 3000),
-});
+      const content = await readProjectFile(filePath);
+      await saveCodeMemory({
+        file_path: filePath,
+        file_purpose: "Project source file",
+        code_summary: createCodeSummary(content),
+        last_known_content: content.slice(0, 3000),
+      });
 
-  await saveCodeEmbedding(filePath, content);
+      await saveCodeEmbedding(filePath, content);
 
-  return Response.json({
-    reply: content,
-  });
-}
+      return Response.json({
+        reply: content,
+      });
+    }
 
-if (message.startsWith("WRITE_FILE:")) {
-  const parts = message.split("---CONTENT---");
+    if (message.startsWith("WRITE_FILE:")) {
+      const parts = message.split("---CONTENT---");
 
-  const filePath = parts[0]
-    .replace("WRITE_FILE:", "")
-    .trim();
+      const filePath = parts[0]
+        .replace("WRITE_FILE:", "")
+        .trim();
 
-  const content = parts[1]?.trim();
+      const content = parts[1]?.trim();
 
-  if (!filePath || !content) {
-    return Response.json({
-      reply:
-        "Format greșit. Folosește WRITE_FILE: app/file.ts ---CONTENT--- codul aici",
-    });
-  }
+      if (!filePath || !content) {
+        return Response.json({
+          reply:
+            "Format greșit. Folosește WRITE_FILE: app/file.ts ---CONTENT--- codul aici",
+        });
+      }
 
-  const result = await writeProjectFile(
-    filePath,
-    content
-  );
+      const result = await writeProjectFile(
+        filePath,
+        content
+      );
 
-  return Response.json({
-    reply:
-      `Fișier modificat: ${filePath}\n` +
-      `Backup: ${result.backup}`,
-  });
-}
+      return Response.json({
+        reply:
+          `Fișier modificat: ${filePath}\n` +
+          `Backup: ${result.backup}`,
+      });
+    }
 
-if (message.startsWith("PATCH_FILE:")) {
-  const parts = message.split("---SEARCH---");
+    if (message.startsWith("PATCH_FILE:")) {
+      const parts = message.split("---SEARCH---");
 
-  const filePath = parts[0]
-    .replace("PATCH_FILE:", "")
-    .trim();
+      const filePath = parts[0]
+        .replace("PATCH_FILE:", "")
+        .trim();
 
-  const searchAndReplace =
-    parts[1]?.split("---REPLACE---");
+      const searchAndReplace =
+        parts[1]?.split("---REPLACE---");
 
-  const searchText =
-    searchAndReplace?.[0]?.trim();
+      const searchText =
+        searchAndReplace?.[0]?.trim();
 
-  const replaceText =
-    searchAndReplace?.[1]?.trim();
+      const replaceText =
+        searchAndReplace?.[1]?.trim();
 
-  if (
-    !filePath ||
-    !searchText ||
-    !replaceText
-  ) {
-    return Response.json({
-      reply:
-        "Format greșit pentru PATCH_FILE.",
-    });
-  }
+      if (
+        !filePath ||
+        !searchText ||
+        !replaceText
+      ) {
+        return Response.json({
+          reply:
+            "Format greșit pentru PATCH_FILE.",
+        });
+      }
 
-  const result = await patchProjectFile(
-    filePath,
-    searchText,
-    replaceText
-  );
+      const result = await patchProjectFile(
+        filePath,
+        searchText,
+        replaceText
+      );
 
-  const updatedContent = await readProjectFile(filePath);
+      const updatedContent = await readProjectFile(filePath);
 
-await saveCodeMemory({
-  file_path: filePath,
-  file_purpose: "Patched project file",
-  code_summary: "Updated after PATCH_FILE",
-  last_known_content: updatedContent.slice(0, 3000),
-});
+      await saveCodeMemory({
+        file_path: filePath,
+        file_purpose: "Patched project file",
+        code_summary: "Updated after PATCH_FILE",
+        last_known_content: updatedContent.slice(0, 3000),
+      });
 
-  await saveCodeEmbedding(filePath, updatedContent);
+      await saveCodeEmbedding(filePath, updatedContent);
 
-  return Response.json({
-    reply:
-      `Patch aplicat: ${filePath}\n` +
-      `Backup: ${result.backup}`,
-  });
-}
+      return Response.json({
+        reply:
+          `Patch aplicat: ${filePath}\n` +
+          `Backup: ${result.backup}`,
+      });
+    }
 
     const currentEmotion = detectCurrentEmotion(message);
     const activeSkill = detectSkill(message);
@@ -825,36 +827,36 @@ await saveCodeMemory({
 
     let realFileContext = "";
 
-const fileMatchRequest = message.match(
-  /(?:verify|check|analyze|read|fix).*?([a-zA-Z0-9\-_/]+\.tsx?|[a-zA-Z0-9\-_/]+\.jsx?)/i
-);
+    const fileMatchRequest = message.match(
+      /(?:verify|check|analyze|read|fix).*?([a-zA-Z0-9\-_/]+\.tsx?|[a-zA-Z0-9\-_/]+\.jsx?)/i
+    );
 
-if (fileMatchRequest) {
-  try {
-    const detectedFile = fileMatchRequest[1];
+    if (fileMatchRequest) {
+      try {
+        const detectedFile = fileMatchRequest[1];
 
-    const normalizedPath = detectedFile.startsWith("app/")
-      ? detectedFile
-      : `app/${detectedFile}`;
+        const normalizedPath = detectedFile.startsWith("app/")
+          ? detectedFile
+          : `app/${detectedFile}`;
 
-    const realContent =
-      await readProjectFile(normalizedPath);
+        const realContent =
+          await readProjectFile(normalizedPath);
 
-    realFileContext =
-      `REAL FILE CONTENT (${normalizedPath}):\n\n` +
-      realContent.slice(0, 12000);
+        realFileContext =
+          `REAL FILE CONTENT (${normalizedPath}):\n\n` +
+          realContent.slice(0, 12000);
 
-      await savePermanentMemory(
-  `File analyzed: ${normalizedPath}`,
-  "code-analysis",
-  8
-);
+        await savePermanentMemory(
+          `File analyzed: ${normalizedPath}`,
+          "code-analysis",
+          8
+        );
 
-  } catch (err) {
-    realFileContext =
-      "Failed to read requested file.";
-  }
-}
+      } catch (err) {
+        realFileContext =
+          "Failed to read requested file.";
+      }
+    }
 
     const memorySummaries = await getMemorySummaries(3);
     const permanentMemories = await getPermanentMemories(10);
@@ -873,6 +875,11 @@ if (fileMatchRequest) {
     const internetLearning = await runInternetLearning();
     const coordinatedAgents = coordinateAgents(activeSkill);
     const adaptiveSystem = adaptSystemBehavior({ errors: 0, memoryLoad: 35, successfulCycles: 12 });
+    const autonomousDecision = makeAutonomousDecision({
+      errors: 0,
+      memoryLoad: 35,
+      pendingUpgrades: evolutionSuggestions.length,
+    });
     const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
@@ -898,21 +905,18 @@ Rules: ${backgroundCycle.rules.join(" | ")}
 Focus: ${evolutionAnalysis.focus}
 Skill: ${evolutionAnalysis.skill}
 Emotion: ${evolutionAnalysis.emotion}
-Weak skills: ${
-      evolutionAnalysis.weakSkills?.length
+Weak skills: ${evolutionAnalysis.weakSkills?.length
         ? evolutionAnalysis.weakSkills.join(", ")
         : "none"
-    }
-Strong traits: ${
-      evolutionAnalysis.strongTraits?.length
+      }
+Strong traits: ${evolutionAnalysis.strongTraits?.length
         ? evolutionAnalysis.strongTraits.join(", ")
         : "none"
-    }
-Active goals: ${
-      evolutionAnalysis.activeGoals?.length
+      }
+Active goals: ${evolutionAnalysis.activeGoals?.length
         ? evolutionAnalysis.activeGoals.join(" | ")
         : "none"
-    }
+      }
 Recommended next step: ${evolutionAnalysis.recommendedNextStep}
 `;
 
@@ -925,9 +929,8 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
 
     const formattedPersonalityTraits = personalityTraits
       .map((trait: any) => {
-        return `Trait: ${trait.trait} | Score: ${trait.score} | Stable: ${
-          trait.stable ? "yes" : "no"
-        } | Description: ${shorten(trait.description || "", 160)}`;
+        return `Trait: ${trait.trait} | Score: ${trait.score} | Stable: ${trait.stable ? "yes" : "no"
+          } | Description: ${shorten(trait.description || "", 160)}`;
       })
       .join("\n");
 
@@ -952,44 +955,39 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
       })
       .join("\n");
 
-      const formattedPermanentMemories =
-  permanentMemories
-    .map((memory: any) => {
-      return `Category: ${
-        memory.category || "general"
-      } | Importance: ${
-        memory.importance || 5
-      } | Memory: ${shorten(
-        memory.memory || "",
-        250
-      )}`;
-    })
-    .join("\n");
+    const formattedPermanentMemories =
+      permanentMemories
+        .map((memory: any) => {
+          return `Category: ${memory.category || "general"
+            } | Importance: ${memory.importance || 5
+            } | Memory: ${shorten(
+              memory.memory || "",
+              250
+            )}`;
+        })
+        .join("\n");
 
     const formattedMemorySummaries = memorySummaries
       .map((item: any) => {
-        return `Summary: ${shorten(item.summary || "", 250)} | Category: ${
-          item.category || "general"
-        } | Importance: ${item.importance || 5}`;
+        return `Summary: ${shorten(item.summary || "", 250)} | Category: ${item.category || "general"
+          } | Importance: ${item.importance || 5}`;
       })
       .join("\n");
 
     const formattedMemories = relevantMemories
       .map((memory: any) => {
-        return `Category: ${memory.category || "general"} | Importance: ${
-          memory.importance || 3
-        } | Relevance: ${memory.relevance_score || 0} | Gabi: ${shorten(
-          memory.user_message || "",
-          180
-        )} | Awenia: ${shorten(memory.awenia_reply || "", 180)}`;
+        return `Category: ${memory.category || "general"} | Importance: ${memory.importance || 3
+          } | Relevance: ${memory.relevance_score || 0} | Gabi: ${shorten(
+            memory.user_message || "",
+            180
+          )} | Awenia: ${shorten(memory.awenia_reply || "", 180)}`;
       })
       .join("\n");
 
     const formattedLearningTasks = learningTasks
       .map((task: any) => {
-        return `Task: ${shorten(task.task || "", 160)} | Status: ${
-          task.status || "pending"
-        } | Priority: ${task.priority || 5}`;
+        return `Task: ${shorten(task.task || "", 160)} | Status: ${task.status || "pending"
+          } | Priority: ${task.priority || 5}`;
       })
       .join("\n");
 
@@ -998,9 +996,8 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
         return `Suggestion: ${shorten(
           item.suggestion || "",
           160
-        )} | Priority: ${item.priority || 5} | Status: ${
-          item.status || "pending"
-        } | Approved: ${item.approved ? "yes" : "no"}`;
+        )} | Priority: ${item.priority || 5} | Status: ${item.status || "pending"
+          } | Approved: ${item.approved ? "yes" : "no"}`;
       })
       .join("\n");
 
@@ -1018,9 +1015,8 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
         return `ID: ${goal.id} | Goal: ${shorten(
           goal.goal || "",
           180
-        )} | Status: ${goal.status || "active"} | Progress: ${
-          goal.progress || 0
-        }% | Priority: ${goal.priority || 5}`;
+        )} | Status: ${goal.status || "active"} | Progress: ${goal.progress || 0
+          }% | Priority: ${goal.priority || 5}`;
       })
       .join("\n");
 
@@ -1156,9 +1152,9 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
     }
 
     const recentChatHistory =
-  await getRecentChatHistory(10);
+      await getRecentChatHistory(10);
 
-await saveChatMessage("user", message);
+    await saveChatMessage("user", message);
 
     const response = await callAIWithFallback([
       ...recentChatHistory,
@@ -1323,23 +1319,22 @@ Answer in the same language as Gabi.
     const reply = response.choices[0].message.content || "";
     await saveChatMessage("assistant", reply);
     const codeBlockMatch = reply.match(/```(?:typescript|ts|javascript|js)?\n([\s\S]*?)```/);
-const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
+    const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
 
- if (
-  codeBlockMatch &&
-  fileMatch
-)
- {
-  const detectedFilePath = fileMatch[1].startsWith("app/")
-    ? fileMatch[1]
-    : `app/${fileMatch[1]}`;
+    if (
+      codeBlockMatch &&
+      fileMatch
+    ) {
+      const detectedFilePath = fileMatch[1].startsWith("app/")
+        ? fileMatch[1]
+        : `app/${fileMatch[1]}`;
 
-  await savePendingAction({
-    action_type: "WRITE_FILE",
-    file_path: detectedFilePath,
-    content: codeBlockMatch[1].trim(),
-  });
-}
+      await savePendingAction({
+        action_type: "WRITE_FILE",
+        file_path: detectedFilePath,
+        content: codeBlockMatch[1].trim(),
+      });
+    }
 
     const importance = detectMemoryImportance(message);
     const emotion = detectEmotionalState(message);
@@ -1354,22 +1349,22 @@ const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
     }
 
     if (importance >= 7) {
-  await savePermanentMemory(
-    `Gabi: ${message}\nAwenia: ${reply}`,
-    activeSkill,
-    importance
-  );
-}
+      await savePermanentMemory(
+        `Gabi: ${message}\nAwenia: ${reply}`,
+        activeSkill,
+        importance
+      );
+    }
 
-await saveMemory(message, reply);
+    await saveMemory(message, reply);
 
-if (importance >= 7) {
-  await savePermanentMemory(
-    `Gabi: ${message}\nAwenia: ${reply}`,
-    activeSkill,
-    importance
-  );
-}
+    if (importance >= 7) {
+      await savePermanentMemory(
+        `Gabi: ${message}\nAwenia: ${reply}`,
+        activeSkill,
+        importance
+      );
+    }
 
     return Response.json({
       reply,
