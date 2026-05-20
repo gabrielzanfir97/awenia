@@ -77,6 +77,8 @@ import { adaptSystemBehavior } from "@/app/adaptive-intelligence";
 
 import { makeAutonomousDecision } from "@/app/decision-engine";
 
+import { buildAwarenessState } from "@/app/awareness";
+
 import { analyzeError } from "@/app/self-debug";
 
 import { generatePatch } from "@/app/patch-generator";
@@ -880,6 +882,7 @@ export async function POST(req: Request) {
       memoryLoad: 35,
       pendingUpgrades: evolutionSuggestions.length,
     });
+    const awarenessState = await buildAwarenessState();
     const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
