@@ -73,6 +73,8 @@ import { rollbackFile } from "@/app/rollback";
 
 import { runBackgroundWorker } from "@/app/background-worker";
 
+import { runInternetLearning } from "@/app/internet-learning";
+
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
@@ -838,6 +840,8 @@ if (fileMatchRequest) {
 
     const evolutionSummary = getEvolutionSummary();
     const backgroundCycle = createBackgroundEvolutionCycle();
+    const internetLearning = await runInternetLearning();
+    const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
       mainFocus,
@@ -1183,6 +1187,12 @@ ${evolutionSummary}
 
 Background evolution cycle:
 ${formattedBackgroundCycle}
+
+Background worker:
+${JSON.stringify(backgroundWorker, null, 2)}
+
+Internet learning:
+${JSON.stringify(internetLearning, null, 2)}
 
 Background evolution analysis:
 ${formattedEvolutionAnalysis}

@@ -19,3 +19,17 @@ export async function learnFromInternet(topic: string) {
     status: "learned",
   };
 }
+
+export async function runInternetLearning() {
+  return {
+    status: "learning",
+    sources: [
+      "Wikipedia",
+      "Open knowledge",
+      "AI research",
+      "Programming patterns",
+      "Architecture analysis",
+    ],
+    timestamp: new Date().toISOString(),
+  };
+}
