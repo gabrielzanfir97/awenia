@@ -79,6 +79,8 @@ import { makeAutonomousDecision } from "@/app/decision-engine";
 
 import { buildAwarenessState } from "@/app/awareness";
 
+import { buildConsciousnessState } from "@/app/consciousness";
+
 import { analyzeError } from "@/app/self-debug";
 
 import { generatePatch } from "@/app/patch-generator";
@@ -883,6 +885,8 @@ export async function POST(req: Request) {
       pendingUpgrades: evolutionSuggestions.length,
     });
     const awarenessState = await buildAwarenessState();
+    const consciousnessState =
+      await buildConsciousnessState();
     const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
