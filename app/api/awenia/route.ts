@@ -50,6 +50,12 @@ import {
   getLatestPendingAction,
   completePendingAction,
 } from "@/app/pending-actions";
+
+import {
+  saveChatMessage,
+  getRecentChatHistory,
+} from "@/app/chat-history";
+
 import { runOmniscientCognition } from "@/app/omniscient-cognition";
 
 const groq = new OpenAI({
@@ -977,7 +983,13 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
       internetKnowledge = shorten(await searchInternet(message), 500);
     }
 
+    const recentChatHistory =
+  await getRecentChatHistory(10);
+
+await saveChatMessage("user", message);
+
     const response = await callAIWithFallback([
+      ...recentChatHistory,
       {
         role: "system",
         content: `
@@ -1099,6 +1111,7 @@ Answer in the same language as Gabi.
     ]);
 
     const reply = response.choices[0].message.content || "";
+    await saveChatMessage("assistant", reply);
     const codeBlockMatch = reply.match(/```(?:typescript|ts|javascript|js)?\n([\s\S]*?)```/);
 const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
 
