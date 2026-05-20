@@ -543,6 +543,16 @@ if (
       });
     }
 
+    if (message.startsWith("READ_REAL_FILE:")) {
+  const filePath = message.replace("READ_REAL_FILE:", "").trim();
+
+  const content = await readProjectFile(filePath);
+
+  return Response.json({
+    reply: content,
+  });
+}
+
 if (message.startsWith("READ_FILE:")) {
   const filePath = message.replace("READ_FILE:", "").trim();
 
@@ -987,7 +997,6 @@ Rules:
 Developer mode:
 - You have access to project tools: LIST_FILES, READ_FILE, WRITE_FILE, PATCH_FILE.
 - Use ProjectMap to understand which file is responsible for UI, API, memory, evolution, internet, core, and development tools.
-- Use ProjectMap to understand which file is responsible for UI, API, memory, evolution, internet, core, and development tools.
 - If Gabi asks for a coding change, first identify the correct file.
 - Before generating a PATCH_FILE, first explain:
   1. what the problem is,
@@ -1093,16 +1102,11 @@ Answer in the same language as Gabi.
     const codeBlockMatch = reply.match(/```(?:typescript|ts|javascript|js)?\n([\s\S]*?)```/);
 const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
 
-if (
+ if (
   codeBlockMatch &&
-  fileMatch &&
-  (
-    reply.includes("WRITE_FILE") ||
-    reply.toLowerCase().includes("creează") ||
-    reply.toLowerCase().includes("creez") ||
-    reply.toLowerCase().includes("create")
-  )
-) {
+  fileMatch
+)
+ {
   const detectedFilePath = fileMatch[1].startsWith("app/")
     ? fileMatch[1]
     : `app/${fileMatch[1]}`;
