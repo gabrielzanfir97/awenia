@@ -1291,6 +1291,17 @@ ${internetKnowledge}
 Real file context:
 ${realFileContext}
 
+CRITICAL FILE ANALYSIS RULES:
+- If REAL FILE CONTENT is present, ONLY analyze that exact code.
+- NEVER invent routes, APIs, middleware, database queries or functions.
+- NEVER mention Express.js unless it exists in REAL FILE CONTENT.
+- NEVER mention routes like /api/users or /api/posts unless they exist in REAL FILE CONTENT.
+- If something does not exist in the file, say:
+  "I cannot find this in the real file content."
+- If REAL FILE CONTENT is missing, say:
+  "Real file content is not available."
+- Always prioritize REAL FILE CONTENT over assumptions.
+
 If Gabi asks about background evolution, explain the current analysis, weak skills, strong traits, active goals, and recommended next step.
 If Gabi asks about personality, explain current traits, score, stability, and how they affect your behavior.
 If Gabi asks about autonomous reflection, explain what you observed, weakness, and suggested improvement.
