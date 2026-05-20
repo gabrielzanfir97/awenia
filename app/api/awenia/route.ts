@@ -708,6 +708,40 @@ await saveCodeMemory({
     }
 
     const relevantMemories = await getRelevantMemories(message, 3);
+
+    let realFileContext = "";
+
+const fileMatchRequest = message.match(
+  /(?:verify|check|analyze|read|fix).*?([a-zA-Z0-9\-_/]+\.tsx?|[a-zA-Z0-9\-_/]+\.jsx?)/i
+);
+
+if (fileMatchRequest) {
+  try {
+    const detectedFile = fileMatchRequest[1];
+
+    const normalizedPath = detectedFile.startsWith("app/")
+      ? detectedFile
+      : `app/${detectedFile}`;
+
+    const realContent =
+      await readProjectFile(normalizedPath);
+
+    realFileContext =
+      `REAL FILE CONTENT (${normalizedPath}):\n\n` +
+      realContent.slice(0, 12000);
+
+      await savePermanentMemory(
+  `File analyzed: ${normalizedPath}`,
+  "code-analysis",
+  8
+);
+
+  } catch (err) {
+    realFileContext =
+      "Failed to read requested file.";
+  }
+}
+
     const memorySummaries = await getMemorySummaries(3);
     const permanentMemories = await getPermanentMemories(10);
     const learningTasks = await getLearningTasks(2);
@@ -799,6 +833,20 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
         return `Skill: ${skill.skill} | Level: ${skill.level} | XP: ${skill.experience}`;
       })
       .join("\n");
+
+      const formattedPermanentMemories =
+  permanentMemories
+    .map((memory: any) => {
+      return `Category: ${
+        memory.category || "general"
+      } | Importance: ${
+        memory.importance || 5
+      } | Memory: ${shorten(
+        memory.memory || "",
+        250
+      )}`;
+    })
+    .join("\n");
 
     const formattedMemorySummaries = memorySummaries
       .map((item: any) => {
@@ -1077,6 +1125,9 @@ Important focus rule:
 Memory summaries:
 ${formattedMemorySummaries}
 
+Permanent memories:
+${formattedPermanentMemories}
+
 Recent relevant memory:
 ${formattedMemories}
 
@@ -1097,6 +1148,9 @@ ${formattedAutonomousPriorities}
 
 Internet knowledge:
 ${internetKnowledge}
+
+Real file context:
+${realFileContext}
 
 If Gabi asks about background evolution, explain the current analysis, weak skills, strong traits, active goals, and recommended next step.
 If Gabi asks about personality, explain current traits, score, stability, and how they affect your behavior.
@@ -1150,6 +1204,16 @@ const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
     }
 
     if (importance >= 7) {
+  await savePermanentMemory(
+    `Gabi: ${message}\nAwenia: ${reply}`,
+    activeSkill,
+    importance
+  );
+}
+
+await saveMemory(message, reply);
+
+if (importance >= 7) {
   await savePermanentMemory(
     `Gabi: ${message}\nAwenia: ${reply}`,
     activeSkill,
