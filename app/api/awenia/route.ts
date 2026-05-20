@@ -63,6 +63,16 @@ import {
 
 import { runOmniscientCognition } from "@/app/omniscient-cognition";
 
+import { createTaskPlan } from "@/app/task-planner";
+
+import { analyzeError } from "@/app/self-debug";
+
+import { generatePatch } from "@/app/patch-generator";
+
+import { rollbackFile } from "@/app/rollback";
+
+import { runBackgroundWorker } from "@/app/background-worker";
+
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
@@ -493,6 +503,78 @@ export async function POST(req: Request) {
 
    return Response.json({
     reply: JSON.stringify(status, null, 2),
+  });
+}
+
+if (message.startsWith("TASK_PLAN:")) {
+  const task = message
+    .replace("TASK_PLAN:", "")
+    .trim();
+
+  const plan = await createTaskPlan(task);
+
+  return Response.json({
+    reply: JSON.stringify(plan, null, 2),
+  });
+}
+
+if (message.startsWith("DEBUG_ERROR:")) {
+  const errorText = message
+    .replace("DEBUG_ERROR:", "")
+    .trim();
+
+  const analysis = analyzeError(errorText);
+
+  return Response.json({
+    reply: JSON.stringify(analysis, null, 2),
+  });
+}
+
+if (message.startsWith("GENERATE_PATCH:")) {
+  const parts = message.split("---");
+
+  const filePath = parts[1]?.trim();
+  const searchText = parts[2]?.trim();
+  const replaceText = parts[3]?.trim();
+
+  if (!filePath || !searchText || !replaceText) {
+    return Response.json({
+      reply:
+        "Format: GENERATE_PATCH: --- filePath --- searchText --- replaceText",
+    });
+  }
+
+  const patch = generatePatch(
+    filePath,
+    searchText,
+    replaceText
+  );
+
+  return Response.json({
+    reply: patch,
+  });
+}
+
+if (message.startsWith("ROLLBACK_FILE:")) {
+  const filePath = message
+    .replace("ROLLBACK_FILE:", "")
+    .trim();
+
+  const result = await rollbackFile(
+  filePath,
+  filePath
+);
+
+  return Response.json({
+    reply: JSON.stringify(result, null, 2),
+  });
+}
+
+if (message === "RUN_BACKGROUND_WORKER") {
+  const result = await runBackgroundWorker();
+
+  return Response.json({
+    reply: JSON.stringify(result, null, 2),
   });
 }
 
