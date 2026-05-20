@@ -1149,6 +1149,14 @@ const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
       await saveMemory(message, reply);
     }
 
+    if (importance >= 7) {
+  await savePermanentMemory(
+    `Gabi: ${message}\nAwenia: ${reply}`,
+    activeSkill,
+    importance
+  );
+}
+
     return Response.json({
       reply,
     });
