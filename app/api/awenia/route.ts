@@ -43,7 +43,13 @@ import {
 
 import { ProjectMap } from "@/app/project-map";
 
-import { saveCodeMemory, searchCodeMemory } from "@/app/code-memory";
+import {
+  saveCodeMemory,
+  searchCodeMemory,
+  getAllCodeMemories,
+  createSmartCodeSummary,
+  detectFilePurpose,
+} from "@/app/code-memory";
 import { saveCodeEmbedding } from "@/app/embeddings";
 import {
   savePendingAction,
@@ -66,6 +72,8 @@ import { runOmniscientCognition } from "@/app/omniscient-cognition";
 import { createTaskPlan } from "@/app/task-planner";
 
 import { coordinateAgents } from "@/app/agent-orchestrator";
+
+import { adaptSystemBehavior } from "@/app/adaptive-intelligence";
 
 import { analyzeError } from "@/app/self-debug";
 
@@ -645,6 +653,13 @@ if (
 
   const content = await readProjectFile(filePath);
 
+  await saveCodeMemory({
+  file_path: filePath,
+  file_purpose: detectFilePurpose(filePath, content),
+  code_summary: createSmartCodeSummary(filePath, content),
+  last_known_content: content.slice(0, 12000),
+});
+
   return Response.json({
     reply: content,
   });
@@ -655,14 +670,27 @@ if (message.startsWith("READ_FILE:")) {
 
   const memoryResults = await searchCodeMemory(filePath);
 
+  const allCodeMemories = await getAllCodeMemories();
+
 if (memoryResults && memoryResults.length > 0) {
   const memory = memoryResults[0];
 
   return Response.json({
-    reply:
-      "Am găsit fișierul în memoria de cod:\n\n" +
-      JSON.stringify(memory, null, 2),
-  });
+  reply:
+    "Am găsit fișierul în memoria de cod:\n\n" +
+    JSON.stringify(memory, null, 2) +
+    "\n\nProject code memory overview:\n\n" +
+    JSON.stringify(
+      allCodeMemories.map((item: any) => ({
+        file_path: item.file_path,
+        file_purpose: item.file_purpose,
+        code_summary: item.code_summary,
+        important_functions: item.important_functions,
+      })),
+      null,
+      2
+    ),
+ });
 }
 
   const content = await readProjectFile(filePath);
@@ -844,6 +872,7 @@ if (fileMatchRequest) {
     const backgroundCycle = createBackgroundEvolutionCycle();
     const internetLearning = await runInternetLearning();
     const coordinatedAgents = coordinateAgents(activeSkill);
+    const adaptiveSystem = adaptSystemBehavior({ errors: 0, memoryLoad: 35, successfulCycles: 12 });
     const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
