@@ -65,6 +65,8 @@ import { runOmniscientCognition } from "@/app/omniscient-cognition";
 
 import { createTaskPlan } from "@/app/task-planner";
 
+import { coordinateAgents } from "@/app/agent-orchestrator";
+
 import { analyzeError } from "@/app/self-debug";
 
 import { generatePatch } from "@/app/patch-generator";
@@ -841,6 +843,7 @@ if (fileMatchRequest) {
     const evolutionSummary = getEvolutionSummary();
     const backgroundCycle = createBackgroundEvolutionCycle();
     const internetLearning = await runInternetLearning();
+    const coordinatedAgents = coordinateAgents(activeSkill);
     const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
@@ -1249,6 +1252,9 @@ ${formattedAutonomousGoals}
 
 Autonomous priorities:
 ${formattedAutonomousPriorities}
+
+Coordinated agents:
+${JSON.stringify(coordinatedAgents, null, 2)}
 
 Internet knowledge:
 ${internetKnowledge}
