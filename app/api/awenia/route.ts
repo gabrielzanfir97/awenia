@@ -1304,6 +1304,42 @@ ${formattedAutonomousPriorities}
 Coordinated agents:
 ${JSON.stringify(coordinatedAgents, null, 2)}
 
+Adaptive system:
+${JSON.stringify(adaptiveSystem, null, 2)}
+
+Autonomous decision:
+${JSON.stringify(autonomousDecision, null, 2)}
+
+Awareness state:
+${JSON.stringify(awarenessState, null, 2)}
+
+Consciousness state:
+${JSON.stringify(consciousnessState, null, 2)}
+
+Self improvement:
+${JSON.stringify(selfImprovement, null, 2)}
+
+Evolution runtime:
+${JSON.stringify(evolutionRuntime, null, 2)}
+
+Autonomous runtime:
+${JSON.stringify(autonomousRuntime, null, 2)}
+
+Managed goals:
+${JSON.stringify(managedGoals, null, 2)}
+
+Long term memory:
+${JSON.stringify(longTermMemory, null, 2)}
+
+Omniscient cognition:
+${JSON.stringify(omniscientCognition, null, 2)}
+
+Project architecture:
+${JSON.stringify(projectArchitecture, null, 2)}
+
+Background worker:
+${JSON.stringify(backgroundWorker, null, 2)}
+
 Internet knowledge:
 ${internetKnowledge}
 
