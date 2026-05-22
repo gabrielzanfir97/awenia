@@ -97,6 +97,10 @@ import { buildCognitiveArchitecture } from "@/app/cognitive-architecture";
 
 import { optimizeCognition } from "@/app/cognitive-optimization";
 
+import { runGlobalCognition } from "@/app/global-cognition";
+
+import { runSuperIntelligenceFramework } from "@/app/super-intelligence";
+
 import { manageAutonomousGoals } from "@/app/goal-manager";
 
 import { buildLongTermMemory } from "@/app/long-term-memory";
@@ -928,6 +932,8 @@ export async function POST(req: Request) {
     const consciousnessState = await buildConsciousnessState();
     const selfImprovement = await runSelfImprovementCycle();
     const evolutionRuntime = await runEvolutionRuntime();
+    const globalCognition = await runGlobalCognition();
+    const superIntelligence = await runSuperIntelligenceFramework();
     const autonomousRuntime = await runAutonomousRuntime();
     const autonomousLoop = await runAutonomousLoop();
     const agentCommunication = communicateBetweenAgents(
