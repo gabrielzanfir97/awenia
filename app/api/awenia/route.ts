@@ -136,6 +136,59 @@ const gemini = new GoogleGenerativeAI(
   process.env.GEMINI_API_KEY || ""
 );
 
+async function callAIWithFallbackOptimized(messages: any[]) {
+  try {
+    console.log("Trying Groq...");
+    console.log(process.env.GROQ_API_KEY);
+
+    return await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 500,
+      messages,
+    });
+  } catch (error) {
+    console.log("GROQ ERROR:", error);
+    console.log("Groq failed, trying Gemini...");
+  }
+
+  try {
+    const model = gemini.getGenerativeModel({
+      model: "gemini-2.0-flash",
+    });
+
+    const prompt = messages
+      .map((m: any) => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    const result = await model.generateContent(prompt);
+
+    const text = result.response.text();
+
+    return {
+      choices: [
+        {
+          message: {
+            content: text,
+          },
+        },
+      ],
+    };
+  } catch (geminiError) {
+    console.log("Gemini failed:", geminiError);
+
+    return {
+      choices: [
+        {
+          message: {
+            content:
+              "Gabi, providerii AI sunt temporar limitați. Așteaptă câteva secunde și încearcă din nou.",
+          },
+        },
+      ],
+    };
+  }
+}
+
 function detectCurrentEmotion(message: string) {
   const lower = message.toLowerCase();
 
