@@ -111,6 +111,8 @@ import { runBackgroundWorker } from "@/app/background-worker";
 
 import { runInternetLearning } from "@/app/internet-learning";
 
+import { runAutonomousTests } from "@/app/autonomous-testing";
+
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
@@ -941,6 +943,7 @@ export async function POST(req: Request) {
     const omniscientCognition = await runOmniscientCognition();
     const projectArchitecture = ProjectMap;
     const backgroundWorker = await runBackgroundWorker();
+    const autonomousTests = await runAutonomousTests();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
       mainFocus,
