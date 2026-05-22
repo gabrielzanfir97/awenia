@@ -81,6 +81,12 @@ import { buildAwarenessState } from "@/app/awareness";
 
 import { buildConsciousnessState } from "@/app/consciousness";
 
+import { runSelfImprovementCycle } from "@/app/self-improvement";
+
+import { runEvolutionRuntime } from "@/app/evolution-runtime";
+
+import { runAutonomousRuntime } from "@/app/autonomous-runtime";
+
 import { analyzeError } from "@/app/self-debug";
 
 import { generatePatch } from "@/app/patch-generator";
@@ -885,8 +891,10 @@ export async function POST(req: Request) {
       pendingUpgrades: evolutionSuggestions.length,
     });
     const awarenessState = await buildAwarenessState();
-    const consciousnessState =
-      await buildConsciousnessState();
+    const consciousnessState = await buildConsciousnessState();
+    const selfImprovement = await runSelfImprovementCycle();
+    const evolutionRuntime = await runEvolutionRuntime();
+    const autonomousRuntime = await runAutonomousRuntime();
     const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
