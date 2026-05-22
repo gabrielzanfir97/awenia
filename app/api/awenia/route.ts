@@ -498,26 +498,41 @@ async function callAIWithFallback(messages: any[]) {
     console.log("Groq failed, trying Gemini...");
   }
 
-  const model = gemini.getGenerativeModel({
-    model: "gemini-2.0-flash",
-  });
+  try {
+    const model = gemini.getGenerativeModel({
+      model: "gemini-2.0-flash",
+    });
 
-  const prompt = messages
-    .map((m: any) => `${m.role}: ${m.content}`)
-    .join("\n");
+    const prompt = messages
+      .map((m: any) => `${m.role}: ${m.content}`)
+      .join("\n");
 
-  const result = await model.generateContent(prompt);
-  const text = result.response.text();
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
 
-  return {
-    choices: [
-      {
-        message: {
-          content: text,
+    return {
+      choices: [
+        {
+          message: {
+            content: text,
+          },
         },
-      },
-    ],
-  };
+      ],
+    };
+  } catch (geminiError) {
+    console.log("Gemini failed:", geminiError);
+
+    return {
+      choices: [
+        {
+          message: {
+            content:
+              "Gabi, providerii AI sunt temporar limitați. Așteaptă câteva secunde și încearcă din nou.",
+          },
+        },
+      ],
+    };
+  }
 }
 
 export async function POST(req: Request) {
