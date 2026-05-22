@@ -87,6 +87,10 @@ import { runEvolutionRuntime } from "@/app/evolution-runtime";
 
 import { runAutonomousRuntime } from "@/app/autonomous-runtime";
 
+import { runAutonomousLoop } from "@/app/autonomous-loop";
+
+import { communicateBetweenAgents } from "@/app/agent-communication";
+
 import { manageAutonomousGoals } from "@/app/goal-manager";
 
 import { buildLongTermMemory } from "@/app/long-term-memory";
@@ -917,6 +921,12 @@ export async function POST(req: Request) {
     const selfImprovement = await runSelfImprovementCycle();
     const evolutionRuntime = await runEvolutionRuntime();
     const autonomousRuntime = await runAutonomousRuntime();
+    const autonomousLoop = await runAutonomousLoop();
+    const agentCommunication = communicateBetweenAgents(
+      "planner",
+      "coder",
+      "Analyze architecture improvements"
+    );
     const managedGoals = manageAutonomousGoals();
     const longTermMemory = await buildLongTermMemory();
     const omniscientCognition = await runOmniscientCognition();
