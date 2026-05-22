@@ -93,6 +93,8 @@ import { communicateBetweenAgents } from "@/app/agent-communication";
 
 import { runAIEcosystem } from "@/app/ai-ecosystem";
 
+import { buildCognitiveArchitecture } from "@/app/cognitive-architecture";
+
 import { manageAutonomousGoals } from "@/app/goal-manager";
 
 import { buildLongTermMemory } from "@/app/long-term-memory";
@@ -930,6 +932,7 @@ export async function POST(req: Request) {
       "Analyze architecture improvements"
     );
     const aiEcosystem = await runAIEcosystem();
+    const cognitiveArchitecture = await buildCognitiveArchitecture();
     const managedGoals = manageAutonomousGoals();
     const longTermMemory = await buildLongTermMemory();
     const omniscientCognition = await runOmniscientCognition();
