@@ -123,6 +123,10 @@ import { runInternetLearning } from "@/app/internet-learning";
 
 import { runAutonomousTests } from "@/app/autonomous-testing";
 
+const openaiClient = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
