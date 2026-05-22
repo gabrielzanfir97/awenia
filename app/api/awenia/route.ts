@@ -488,6 +488,7 @@ function createCodeSummary(content: string) {
 async function callAIWithFallback(messages: any[]) {
   try {
     console.log("Trying Groq...");
+    console.log(process.env.GROQ_API_KEY);
 
     return await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
@@ -495,6 +496,7 @@ async function callAIWithFallback(messages: any[]) {
       messages,
     });
   } catch (error) {
+    console.log("GROQ ERROR:", error);
     console.log("Groq failed, trying Gemini...");
   }
 
@@ -508,6 +510,7 @@ async function callAIWithFallback(messages: any[]) {
       .join("\n");
 
     const result = await model.generateContent(prompt);
+
     const text = result.response.text();
 
     return {
