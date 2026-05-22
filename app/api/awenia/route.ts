@@ -87,6 +87,10 @@ import { runEvolutionRuntime } from "@/app/evolution-runtime";
 
 import { runAutonomousRuntime } from "@/app/autonomous-runtime";
 
+import { manageAutonomousGoals } from "@/app/goal-manager";
+
+import { buildLongTermMemory } from "@/app/long-term-memory";
+
 import { analyzeError } from "@/app/self-debug";
 
 import { generatePatch } from "@/app/patch-generator";
@@ -895,6 +899,10 @@ export async function POST(req: Request) {
     const selfImprovement = await runSelfImprovementCycle();
     const evolutionRuntime = await runEvolutionRuntime();
     const autonomousRuntime = await runAutonomousRuntime();
+    const managedGoals = manageAutonomousGoals();
+    const longTermMemory = await buildLongTermMemory();
+    const omniscientCognition = await runOmniscientCognition();
+    const projectArchitecture = ProjectMap;
     const backgroundWorker = await runBackgroundWorker();
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
