@@ -95,6 +95,8 @@ import { runAIEcosystem } from "@/app/ai-ecosystem";
 
 import { buildCognitiveArchitecture } from "@/app/cognitive-architecture";
 
+import { optimizeCognition } from "@/app/cognitive-optimization";
+
 import { manageAutonomousGoals } from "@/app/goal-manager";
 
 import { buildLongTermMemory } from "@/app/long-term-memory";
@@ -933,6 +935,7 @@ export async function POST(req: Request) {
     );
     const aiEcosystem = await runAIEcosystem();
     const cognitiveArchitecture = await buildCognitiveArchitecture();
+    const cognitiveOptimization = await optimizeCognition();
     const managedGoals = manageAutonomousGoals();
     const longTermMemory = await buildLongTermMemory();
     const omniscientCognition = await runOmniscientCognition();
