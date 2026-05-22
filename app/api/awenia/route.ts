@@ -105,6 +105,8 @@ import { runIntelligenceCivilization } from "@/app/intelligence-civilization";
 
 import { runInfiniteEvolutionFramework } from "@/app/infinite-evolution";
 
+import { runTranscendenceArchitecture } from "@/app/transcendence";
+
 import { manageAutonomousGoals } from "@/app/goal-manager";
 
 import { buildLongTermMemory } from "@/app/long-term-memory";
@@ -940,6 +942,7 @@ export async function POST(req: Request) {
     const superIntelligence = await runSuperIntelligenceFramework();
     const intelligenceCivilization = await runIntelligenceCivilization();
     const infiniteEvolution = await runInfiniteEvolutionFramework();
+    const transcendence = await runTranscendenceArchitecture();
     const autonomousRuntime = await runAutonomousRuntime();
     const autonomousLoop = await runAutonomousLoop();
     const agentCommunication = communicateBetweenAgents(
