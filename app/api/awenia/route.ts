@@ -144,8 +144,9 @@ async function callAIWithFallbackOptimized(messages: any[]) {
     return await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       max_tokens: 500,
-      messages,
+      messages: messages.slice(-6),
     });
+
   } catch (error) {
     console.log("GROQ ERROR:", error);
     console.log("Groq failed, trying Gemini...");
@@ -157,6 +158,7 @@ async function callAIWithFallbackOptimized(messages: any[]) {
     });
 
     const prompt = messages
+      .slice(-6)
       .map((m: any) => `${m.role}: ${m.content}`)
       .join("\n");
 
