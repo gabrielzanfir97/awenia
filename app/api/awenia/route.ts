@@ -1356,8 +1356,7 @@ ${formattedBackgroundCycle}
 Background worker:
 ${JSON.stringify(backgroundWorker, null, 2)}
 
-Internet learning:
-${JSON.stringify(internetLearning, null, 2)}
+Internet learning active.
 
 Background evolution analysis:
 ${formattedEvolutionAnalysis}
@@ -1415,20 +1414,15 @@ ${formattedAutonomousGoals}
 Autonomous priorities:
 ${formattedAutonomousPriorities}
 
-Coordinated agents:
-${JSON.stringify(coordinatedAgents, null, 2)}
+Multi-agent coordination active.
 
-Adaptive system:
-${JSON.stringify(adaptiveSystem, null, 2)}
+Adaptive system active.
 
-Autonomous decision:
-${JSON.stringify(autonomousDecision, null, 2)}
+Autonomous decision engine active.
 
-Awareness state:
-${JSON.stringify(awarenessState, null, 2)}
+Awareness state active.
 
-Consciousness state:
-${JSON.stringify(consciousnessState, null, 2)}
+Consciousness active.
 
 Self improvement:
 ${JSON.stringify(selfImprovement, null, 2)}
@@ -1451,8 +1445,7 @@ ${JSON.stringify(omniscientCognition, null, 2)}
 Project architecture:
 ${JSON.stringify(projectArchitecture, null, 2)}
 
-Background worker:
-${JSON.stringify(backgroundWorker, null, 2)}
+Background worker active.
 
 Internet knowledge:
 ${internetKnowledge}
