@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callAIProvider } from "@/app/ai-provider-router";
 import {
   saveMemory,
   getRelevantMemories,
@@ -151,6 +152,52 @@ async function callAIWithFallbackOptimized(messages: any[]) {
       content: String(m.content || "").slice(0, 1200),
     };
   });
+
+  try {
+    console.log("Trying LOCAL AI...");
+
+    const localPrompt = compactMessages
+      .map((m: any) => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    const localResponse = await callAIProvider(localPrompt);
+
+    if (localResponse) {
+      return {
+        choices: [
+          {
+            message: {
+              content: localResponse,
+            },
+          },
+        ],
+      };
+    }
+
+    console.log("Local AI unavailable, trying Groq...");
+  } catch (localError) {
+    console.log("LOCAL AI ERROR:", localError);
+    console.log("Falling back to Groq...");
+  }
+
+  const latestUserMessage =
+  compactMessages[compactMessages.length - 1]?.content || "";
+
+console.log("Trying LOCAL AI...");
+
+const localResponse = await callAIProvider(latestUserMessage);
+
+if (localResponse) {
+  return {
+    choices: [
+      {
+        message: {
+          content: localResponse,
+        },
+      },
+    ],
+  };
+}
 
   try {
     console.log("Trying Groq...");
