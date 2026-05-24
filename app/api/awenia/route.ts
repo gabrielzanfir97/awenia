@@ -137,16 +137,29 @@ const gemini = new GoogleGenerativeAI(
 );
 
 async function callAIWithFallbackOptimized(messages: any[]) {
+  const compactMessages = messages.slice(-6).map((m: any) => {
+    if (m.role === "system") {
+      return {
+        role: "system",
+        content:
+          "You are Awenia, Gabi's personal AI. Answer clearly, shortly, step by step. For coding, do not invent files or functions. Important changes require Gabi approval.",
+      };
+    }
+
+    return {
+      role: m.role,
+      content: String(m.content || "").slice(0, 1200),
+    };
+  });
+
   try {
     console.log("Trying Groq...");
-    console.log(process.env.GROQ_API_KEY);
 
     return await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      max_tokens: 500,
-      messages: messages.slice(-6),
+      max_tokens: 300,
+      messages: compactMessages,
     });
-
   } catch (error) {
     console.log("GROQ ERROR:", error);
     console.log("Groq failed, trying Gemini...");
@@ -157,13 +170,11 @@ async function callAIWithFallbackOptimized(messages: any[]) {
       model: "gemini-2.0-flash",
     });
 
-    const prompt = messages
-      .slice(-6)
+    const prompt = compactMessages
       .map((m: any) => `${m.role}: ${m.content}`)
       .join("\n");
 
     const result = await model.generateContent(prompt);
-
     const text = result.response.text();
 
     return {
