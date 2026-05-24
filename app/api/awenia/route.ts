@@ -1293,7 +1293,7 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
 
     await saveChatMessage("user", message);
 
-    const response = await callAIWithFallback([
+    const response = await callAIWithFallbackOptimized([
       ...recentChatHistory,
       {
         role: "system",
