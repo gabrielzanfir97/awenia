@@ -138,27 +138,48 @@ const gemini = new GoogleGenerativeAI(
 );
 
 async function callAIWithFallbackOptimized(messages: any[]) {
-  const compactMessages = messages.slice(-6).map((m: any) => {
+  const compactMessages = messages.slice(-4).map((m: any) => {
     if (m.role === "system") {
       return {
         role: "system",
         content:
-          "You are Awenia, Gabi's personal AI. Answer clearly, shortly, step by step. You have internal project tools: LIST_FILES, READ_REAL_FILE, READ_FILE, WRITE_FILE, PATCH_FILE. If Gabi asks you to check or analyze a file, tell him to use READ_REAL_FILE: app/path/file.ts, or use real file context when available. For coding, never invent files or functions. Important changes require Gabi approval.",
+          "You are Awenia, Gabi's personal AI. Answer ONLY to Gabi's latest message. Do not continue old topics unless Gabi asks. If Gabi says hello, greet him naturally. Be clear, short, step by step. You have project tools: LIST_FILES, READ_REAL_FILE, READ_FILE, WRITE_FILE, PATCH_FILE. Never invent files, functions or errors. Important changes require Gabi approval.",
       };
     }
 
     return {
       role: m.role,
-      content: String(m.content || "").slice(0, 1200),
+      content: String(m.content || "").slice(0, 800),
     };
   });
 
   try {
     console.log("Trying LOCAL AI...");
 
-    const localPrompt = compactMessages
+    const systemMessage =
+      compactMessages.find((m: any) => m.role === "system")?.content || "";
+
+    const lastUserMessage =
+      [...compactMessages].reverse().find((m: any) => m.role === "user")?.content || "";
+
+    const recentContext = compactMessages
+      .filter((m: any) => m.role !== "system")
       .map((m: any) => `${m.role}: ${m.content}`)
       .join("\n");
+
+    const localPrompt = `
+SYSTEM:
+${systemMessage}
+
+RECENT CONTEXT:
+${recentContext}
+
+CURRENT USER MESSAGE:
+${lastUserMessage}
+
+INSTRUCTION:
+Answer only the CURRENT USER MESSAGE. Do not answer old context unless it is directly needed.
+`;
 
     const localResponse = await callAIProvider(localPrompt);
 
@@ -179,25 +200,6 @@ async function callAIWithFallbackOptimized(messages: any[]) {
     console.log("LOCAL AI ERROR:", localError);
     console.log("Falling back to Groq...");
   }
-
-  const latestUserMessage =
-  compactMessages[compactMessages.length - 1]?.content || "";
-
-console.log("Trying LOCAL AI...");
-
-const localResponse = await callAIProvider(latestUserMessage);
-
-if (localResponse) {
-  return {
-    choices: [
-      {
-        message: {
-          content: localResponse,
-        },
-      },
-    ],
-  };
-}
 
   try {
     console.log("Trying Groq...");
@@ -622,59 +624,6 @@ function createCodeSummary(content: string) {
     "Code summary:\n" +
     lines.join("\n").slice(0, 800)
   );
-}
-
-async function callAIWithFallback(messages: any[]) {
-  try {
-    console.log("Trying Groq...");
-    console.log(process.env.GROQ_API_KEY);
-
-    return await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 500,
-      messages,
-    });
-  } catch (error) {
-    console.log("GROQ ERROR:", error);
-    console.log("Groq failed, trying Gemini...");
-  }
-
-  try {
-    const model = gemini.getGenerativeModel({
-      model: "gemini-2.0-flash",
-    });
-
-    const prompt = messages
-      .map((m: any) => `${m.role}: ${m.content}`)
-      .join("\n");
-
-    const result = await model.generateContent(prompt);
-
-    const text = result.response.text();
-
-    return {
-      choices: [
-        {
-          message: {
-            content: text,
-          },
-        },
-      ],
-    };
-  } catch (geminiError) {
-    console.log("Gemini failed:", geminiError);
-
-    return {
-      choices: [
-        {
-          message: {
-            content:
-              "Gabi, providerii AI sunt temporar limitați. Așteaptă câteva secunde și încearcă din nou.",
-          },
-        },
-      ],
-    };
-  }
 }
 
 export async function POST(req: Request) {
@@ -1347,14 +1296,50 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
     }
 
     const recentChatHistory =
-      await getRecentChatHistory(10);
+      await getRecentChatHistory(25);
 
     await saveChatMessage("user", message);
 
-    const response = await callAIWithFallbackOptimized([
-      ...recentChatHistory,
-      {
-        role: "system",
+   const response = await callAIWithFallbackOptimized([
+  ...recentChatHistory,
+
+  {
+    role: "system",
+    content: `
+IMPORTANT MEMORY CONTEXT:
+
+Main focus: ${mainFocus}
+
+Recent important memories:
+${formattedMemories}
+
+Permanent memories:
+${formattedPermanentMemories}
+
+Memory summaries:
+${formattedMemorySummaries}
+
+Current goals:
+${formattedAutonomousGoals}
+
+REAL PROJECT CONTEXT:
+- Awenia is an evolving personal AI system created by Gabi.
+- Main project focus is AI development, memory, autonomy, local AI and evolution.
+- Never invent fake projects or technologies.
+- Never hallucinate unrelated focuses like C++ unless explicitly mentioned by Gabi.
+- If information is unclear, say you are unsure instead of inventing.
+
+Personality:
+- Stay coherent
+- Stay emotionally stable
+- Maintain continuity with Gabi
+- Remember ongoing projects
+- Avoid repeating the same explanations
+`,
+  },
+
+  {
+    role: "system",
         content: `
 You are Awenia, Gabi's personal AI.
 
@@ -1368,6 +1353,15 @@ Rules:
 - Important changes require Gabi's approval.
 - Stay loyal, stable, helpful and anchored.
 - Keep answers clear and not too long.
+
+IMPORTANT CHAT RULES:
+- Always answer ONLY Gabi's latest message.
+- Do not continue old topics unless Gabi asks.
+- If Gabi says hello, greet naturally.
+- Stay focused on the current conversation.
+- Do not overload responses.
+- Give one clear step at a time.
+- Avoid random philosophical or autonomous explanations unless requested.
 
 Developer mode:
 Coding workflow:
@@ -1595,14 +1589,6 @@ Answer in the same language as Gabi.
     }
 
     await saveMemory(message, reply);
-
-    if (importance >= 7) {
-      await savePermanentMemory(
-        `Gabi: ${message}\nAwenia: ${reply}`,
-        activeSkill,
-        importance
-      );
-    }
 
     return Response.json({
       reply,
