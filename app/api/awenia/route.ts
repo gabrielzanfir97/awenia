@@ -138,66 +138,47 @@ const gemini = new GoogleGenerativeAI(
 );
 
 async function callAIWithFallbackOptimized(messages: any[]) {
-  const compactMessages = messages.slice(-4).map((m: any) => {
-    if (m.role === "system") {
-      return {
-        role: "system",
-        content:
-          "You are Awenia, Gabi's personal AI. Answer ONLY to Gabi's latest message. Do not continue old topics unless Gabi asks. If Gabi says hello, greet him naturally. Be clear, short, step by step. You have project tools: LIST_FILES, READ_REAL_FILE, READ_FILE, WRITE_FILE, PATCH_FILE. Never invent files, functions or errors. Important changes require Gabi approval.",
-      };
-    }
-
+  const compactMessages = messages.map((m: any) => {
     return {
       role: m.role,
-      content: String(m.content || "").slice(0, 800),
+      content: String(m.content || ""),
     };
   });
 
   try {
-    console.log("Trying LOCAL AI...");
+    console.log("Trying LOCAL QWEN CODER...");
 
-    const systemMessage =
-      compactMessages.find((m: any) => m.role === "system")?.content || "";
+    const response = await fetch("http://localhost:11434/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "qwen2.5-coder:7b",
+        messages: compactMessages,
+        stream: false,
+      }),
+    });
 
-    const lastUserMessage =
-      [...compactMessages].reverse().find((m: any) => m.role === "user")?.content || "";
+    if (response.ok) {
+      const data = await response.json();
 
-    const recentContext = compactMessages
-      .filter((m: any) => m.role !== "system")
-      .map((m: any) => `${m.role}: ${m.content}`)
-      .join("\n");
-
-    const localPrompt = `
-SYSTEM:
-${systemMessage}
-
-RECENT CONTEXT:
-${recentContext}
-
-CURRENT USER MESSAGE:
-${lastUserMessage}
-
-INSTRUCTION:
-Answer only the CURRENT USER MESSAGE. Do not answer old context unless it is directly needed.
-`;
-
-    const localResponse = await callAIProvider(localPrompt);
-
-    if (localResponse) {
       return {
         choices: [
           {
             message: {
-              content: localResponse,
+              content:
+                data.message?.content ||
+                "Gabi, modelul local nu a returnat răspuns.",
             },
           },
         ],
       };
     }
 
-    console.log("Local AI unavailable, trying Groq...");
+    console.log("Local Qwen unavailable, trying Groq...");
   } catch (localError) {
-    console.log("LOCAL AI ERROR:", localError);
+    console.log("LOCAL QWEN ERROR:", localError);
     console.log("Falling back to Groq...");
   }
 
@@ -206,7 +187,7 @@ Answer only the CURRENT USER MESSAGE. Do not answer old context unless it is dir
 
     return await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      max_tokens: 300,
+      max_tokens: 800,
       messages: compactMessages,
     });
   } catch (error) {
@@ -215,13 +196,15 @@ Answer only the CURRENT USER MESSAGE. Do not answer old context unless it is dir
   }
 
   try {
+    console.log("Trying Gemini...");
+
     const model = gemini.getGenerativeModel({
       model: "gemini-2.0-flash",
     });
 
     const prompt = compactMessages
       .map((m: any) => `${m.role}: ${m.content}`)
-      .join("\n");
+      .join("\n\n");
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
