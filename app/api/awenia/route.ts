@@ -35,22 +35,12 @@ import {
 import {
   readProjectFile,
   writeProjectFile,
-  listProjectFiles,
-  patchProjectFile,
 } from "@/app/dev-agent";
 
 import { ProjectMap } from "@/app/project-map";
 
-import {
-  saveCodeMemory,
-  searchCodeMemory,
-  getAllCodeMemories,
-  createSmartCodeSummary,
-  detectFilePurpose,
-  setActiveCodeFile,
-  getActiveCodeFile,
-} from "@/app/code-memory";
-import { saveCodeEmbedding } from "@/app/embeddings";
+import { getActiveCodeFile } from "@/app/code-memory";
+
 import {
   savePendingAction,
   getLatestPendingAction,
@@ -193,15 +183,6 @@ async function callAIWithFallbackOptimized(messages: any[]) {
       ],
     };
   }
-}
-
-function createCodeSummary(content: string) {
-  const lines = content.split("\n").slice(0, 20);
-
-  return (
-    "Code summary:\n" +
-    lines.join("\n").slice(0, 800)
-  );
 }
 
 export async function POST(req: Request) {
