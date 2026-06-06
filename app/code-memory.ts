@@ -151,3 +151,19 @@ Main logic:
 ${shortContent}
   `.trim();
 }
+
+let activeCodeFile: {
+  file_path: string;
+  content: string;
+} | null = null;
+
+export function setActiveCodeFile(file_path: string, content: string) {
+  activeCodeFile = {
+    file_path,
+    content,
+  };
+}
+
+export function getActiveCodeFile() {
+  return activeCodeFile;
+}
