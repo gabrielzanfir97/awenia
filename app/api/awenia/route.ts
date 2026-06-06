@@ -137,6 +137,8 @@ import { shouldCreateAutonomousReflection, shouldEvolvePersonality, ensureCorePe
 
 import { getSkillInstruction } from "@/app/skill-instructions";
 
+import { handleListFiles, handleSearchCodeMemory, handleReadRealFile, handleReadFile, handleWriteFile, handlePatchFile, handleAnalyzeRealFile, handleGeneratePatch, handleRollbackFile } from "@/app/code-tools-handler";
+
 async function callAIWithFallbackOptimized(messages: any[]) {
   try {
     console.log("Trying LOCAL QWEN CODER...");
@@ -278,44 +280,14 @@ Note: Image uploaded successfully.
     }
 
     if (message.startsWith("GENERATE_PATCH:")) {
-      const parts = message.split("---");
-
-      const filePath = parts[1]?.trim();
-      const searchText = parts[2]?.trim();
-      const replaceText = parts[3]?.trim();
-
-      if (!filePath || !searchText || !replaceText) {
-        return Response.json({
-          reply:
-            "Format: GENERATE_PATCH: --- filePath --- searchText --- replaceText",
-        });
-      }
-
-      const patch = generatePatch(
-        filePath,
-        searchText,
-        replaceText
-      );
-
-      return Response.json({
-        reply: patch,
-      });
-    }
+  return await handleGeneratePatch(message);
+}
 
     if (message.startsWith("ROLLBACK_FILE:")) {
-      const filePath = message
-        .replace("ROLLBACK_FILE:", "")
-        .trim();
+  const filePath = message.replace("ROLLBACK_FILE:", "").trim();
 
-      const result = await rollbackFile(
-        filePath,
-        filePath
-      );
-
-      return Response.json({
-        reply: JSON.stringify(result, null, 2),
-      });
-    }
+  return await handleRollbackFile(filePath);
+}
 
     if (message === "RUN_BACKGROUND_WORKER") {
       const result = await runBackgroundWorker();
@@ -356,201 +328,43 @@ Note: Image uploaded successfully.
     }
 
     if (message.startsWith("LIST_FILES")) {
-      const files = await listProjectFiles();
-
-      return Response.json({
-        reply: JSON.stringify(files, null, 2),
-      });
-    }
+  return await handleListFiles();
+}
 
     if (message.startsWith("SEARCH_CODE_MEMORY:")) {
-      const query = message
-        .replace("SEARCH_CODE_MEMORY:", "")
-        .trim();
+  const query = message.replace("SEARCH_CODE_MEMORY:", "").trim();
 
-      const results = await searchCodeMemory(query);
-
-      return Response.json({
-        reply: JSON.stringify(results, null, 2),
-      });
-    }
+  return await handleSearchCodeMemory(query);
+}
 
     if (message.startsWith("ANALYZE_REAL_FILE:")) {
   const filePath = message.replace("ANALYZE_REAL_FILE:", "").trim();
 
-  const content = await readProjectFile(filePath);
-
-  const response = await callAIWithFallbackOptimized([
-    {
-      role: "system",
-      content: `
-Ești Awenia, asistent de programare pentru Gabi.
-
-Analizează DOAR codul primit mai jos.
-Nu inventa cod.
-Nu folosi memorii.
-Găsește buguri reale, optimizări reale și patch concret.
-Răspunde în română.
-
-FIȘIER:
-${filePath}
-
-COD:
-${content.slice(0, 12000)}
-`,
-    },
-    {
-      role: "user",
-      content:
-        "Analizează acest fișier. Găsește un bug real, explică-l și propune un patch. Nu modifica nimic fără aprobarea mea.",
-    },
-  ]);
-
-  return Response.json({
-    reply: response.choices[0].message.content || "Nu am găsit analiză.",
-  });
+  return await handleAnalyzeRealFile(
+    filePath,
+    callAIWithFallbackOptimized
+  );
 }
 
     if (message.startsWith("READ_REAL_FILE:")) {
-      const filePath = message.replace("READ_REAL_FILE:", "").trim();
+  const filePath = message.replace("READ_REAL_FILE:", "").trim();
 
-      const content = await readProjectFile(filePath);
-
-      setActiveCodeFile(filePath, content);
-
-      await saveCodeMemory({
-        file_path: filePath,
-        file_purpose: detectFilePurpose(filePath, content),
-        code_summary: createSmartCodeSummary(filePath, content),
-        last_known_content: content.slice(0, 12000),
-      });
-
-      return Response.json({
-        reply: content,
-      });
-    }
+  return await handleReadRealFile(filePath);
+}
 
     if (message.startsWith("READ_FILE:")) {
-      const filePath = message.replace("READ_FILE:", "").trim();
+  const filePath = message.replace("READ_FILE:", "").trim();
 
-      const memoryResults = await searchCodeMemory(filePath);
-
-      const allCodeMemories = await getAllCodeMemories();
-
-      if (memoryResults && memoryResults.length > 0) {
-        const memory = memoryResults[0];
-
-        return Response.json({
-          reply:
-            "Am găsit fișierul în memoria de cod:\n\n" +
-            JSON.stringify(memory, null, 2) +
-            "\n\nProject code memory overview:\n\n" +
-            JSON.stringify(
-              allCodeMemories.map((item: any) => ({
-                file_path: item.file_path,
-                file_purpose: item.file_purpose,
-                code_summary: item.code_summary,
-                important_functions: item.important_functions,
-              })),
-              null,
-              2
-            ),
-        });
-      }
-
-      const content = await readProjectFile(filePath);
-      await saveCodeMemory({
-        file_path: filePath,
-        file_purpose: "Project source file",
-        code_summary: createCodeSummary(content),
-        last_known_content: content.slice(0, 3000),
-      });
-
-      await saveCodeEmbedding(filePath, content);
-
-      return Response.json({
-        reply: content,
-      });
-    }
+  return await handleReadFile(filePath);
+}
 
     if (message.startsWith("WRITE_FILE:")) {
-      const parts = message.split("---CONTENT---");
-
-      const filePath = parts[0]
-        .replace("WRITE_FILE:", "")
-        .trim();
-
-      const content = parts[1]?.trim();
-
-      if (!filePath || !content) {
-        return Response.json({
-          reply:
-            "Format greșit. Folosește WRITE_FILE: app/file.ts ---CONTENT--- codul aici",
-        });
-      }
-
-      const result = await writeProjectFile(
-        filePath,
-        content
-      );
-
-      return Response.json({
-        reply:
-          `Fișier modificat: ${filePath}\n` +
-          `Backup: ${result.backup}`,
-      });
-    }
+  return await handleWriteFile(message);
+}
 
     if (message.startsWith("PATCH_FILE:")) {
-      const parts = message.split("---SEARCH---");
-
-      const filePath = parts[0]
-        .replace("PATCH_FILE:", "")
-        .trim();
-
-      const searchAndReplace =
-        parts[1]?.split("---REPLACE---");
-
-      const searchText =
-        searchAndReplace?.[0]?.trim();
-
-      const replaceText =
-        searchAndReplace?.[1]?.trim();
-
-      if (
-        !filePath ||
-        !searchText ||
-        !replaceText
-      ) {
-        return Response.json({
-          reply:
-            "Format greșit pentru PATCH_FILE.",
-        });
-      }
-
-      const result = await patchProjectFile(
-        filePath,
-        searchText,
-        replaceText
-      );
-
-      const updatedContent = await readProjectFile(filePath);
-
-      await saveCodeMemory({
-        file_path: filePath,
-        file_purpose: "Patched project file",
-        code_summary: "Updated after PATCH_FILE",
-        last_known_content: updatedContent.slice(0, 3000),
-      });
-
-      await saveCodeEmbedding(filePath, updatedContent);
-
-      return Response.json({
-        reply:
-          `Patch aplicat: ${filePath}\n` +
-          `Backup: ${result.backup}`,
-      });
-    }
+  return await handlePatchFile(message);
+}
 
     const currentEmotion = detectCurrentEmotion(message);
     const activeSkill = detectSkill(message);
