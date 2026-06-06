@@ -129,6 +129,8 @@ import { getSkillInstruction } from "@/app/skill-instructions";
 
 import { handleListFiles, handleSearchCodeMemory, handleReadRealFile, handleReadFile, handleWriteFile, handlePatchFile, handleAnalyzeRealFile, handleGeneratePatch, handleRollbackFile } from "@/app/code-tools-handler";
 
+import { handleRunBackgroundWorker, handleDebugError, handleTaskPlan, handleAweniaStatus } from "@/app/system-tools-handler";
+
 async function callAIWithFallbackOptimized(messages: any[]) {
   try {
     console.log("Trying LOCAL QWEN CODER...");
@@ -228,37 +230,16 @@ Note: Image uploaded successfully.
     }
 
     if (message === "AWENIA_STATUS") {
-      const status =
-        await runOmniscientCognition();
-
-      return Response.json({
-        reply: JSON.stringify(status, null, 2),
-      });
-    }
+  return await handleAweniaStatus();
+}
 
     if (message.startsWith("TASK_PLAN:")) {
-      const task = message
-        .replace("TASK_PLAN:", "")
-        .trim();
-
-      const plan = await createTaskPlan(task);
-
-      return Response.json({
-        reply: JSON.stringify(plan, null, 2),
-      });
-    }
+  return await handleTaskPlan(message);
+}
 
     if (message.startsWith("DEBUG_ERROR:")) {
-      const errorText = message
-        .replace("DEBUG_ERROR:", "")
-        .trim();
-
-      const analysis = analyzeError(errorText);
-
-      return Response.json({
-        reply: JSON.stringify(analysis, null, 2),
-      });
-    }
+  return await handleDebugError(message);
+}
 
     if (message.startsWith("GENERATE_PATCH:")) {
   return await handleGeneratePatch(message);
@@ -271,12 +252,8 @@ Note: Image uploaded successfully.
 }
 
     if (message === "RUN_BACKGROUND_WORKER") {
-      const result = await runBackgroundWorker();
-
-      return Response.json({
-        reply: JSON.stringify(result, null, 2),
-      });
-    }
+  return await handleRunBackgroundWorker();
+}
 
     if (
       message.toLowerCase() === "ok" ||
