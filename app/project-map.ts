@@ -46,4 +46,32 @@ export const ProjectMap = {
     file: "app/supabase.ts",
     purpose: "Supabase client connection for persistent database memory.",
   },
+
+  awareness: {
+  file: "app/awareness.ts",
+  purpose:
+    "Real awareness state built from memory, goals, skills and evolution data.",
+  },
+
+  consciousness: {
+  file: "app/consciousness.ts",
+  purpose:
+    "High-level state combining awareness, memory, goals and runtime.",
+  },
+
+  autonomy: {
+  runtime: "app/autonomous-runtime.ts",
+  selfImprovement: "app/self-improvement.ts",
+  decisionEngine: "app/decision-engine.ts",
+  goalManager: "app/goal-manager.ts",
+  purpose:
+    "Autonomous decision making and self-improvement systems.",
+  },
+
+  agents: {
+  agents: "app/agents.ts",
+  orchestrator: "app/agent-orchestrator.ts",
+  purpose:
+    "Multi-agent coordination and workflow execution.",
+  },
 };

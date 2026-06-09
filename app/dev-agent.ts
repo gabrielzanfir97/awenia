@@ -58,7 +58,37 @@ export async function listProjectFiles(folder = "app") {
     throw new Error("Access denied.");
   }
 
-  return await fs.readdir(fullPath);
+  async function walk(currentPath: string, relativePath: string): Promise<string[]> {
+    const entries = await fs.readdir(currentPath, {
+      withFileTypes: true,
+    });
+
+    const files: string[] = [];
+
+    for (const entry of entries) {
+      const entryRelativePath = path.join(relativePath, entry.name);
+      const entryFullPath = path.join(currentPath, entry.name);
+
+      if (isBlocked(entryFullPath)) {
+        continue;
+      }
+
+      if (entry.isDirectory()) {
+        const nestedFiles = await walk(
+          entryFullPath,
+          entryRelativePath
+        );
+
+        files.push(...nestedFiles);
+      } else {
+        files.push(entryRelativePath.replace(/\\/g, "/"));
+      }
+    }
+
+    return files;
+  }
+
+  return await walk(fullPath, folder);
 }
 
 export async function patchProjectFile(
