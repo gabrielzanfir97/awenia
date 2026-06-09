@@ -4,30 +4,19 @@ import { manageAutonomousGoals } from "./goal-manager";
 import { runEvolutionRuntime } from "./evolution-runtime";
 
 export async function buildConsciousnessState() {
-  const awareness =
-    await buildAwarenessState();
-
-  const memory =
-    await buildLongTermMemory();
-
-  const goals =
-    manageAutonomousGoals();
-
-  const runtime =
-    await runEvolutionRuntime();
+  const awareness = await buildAwarenessState();
+  const memory = await buildLongTermMemory();
+  const goals = await manageAutonomousGoals();
+  const runtime = await runEvolutionRuntime();
 
   return {
     consciousness: {
       identity: "Awenia",
-
       state: "persistent",
 
       awareness,
-
       memory,
-
       goals,
-
       runtime,
 
       continuity: {
