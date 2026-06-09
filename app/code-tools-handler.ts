@@ -1,8 +1,37 @@
-import { listProjectFiles, readProjectFile, writeProjectFile, patchProjectFile } from "@/app/dev-agent";
-import { searchCodeMemory, getAllCodeMemories, saveCodeMemory, createSmartCodeSummary, detectFilePurpose, setActiveCodeFile } from "@/app/code-memory";
+import {
+  listProjectFiles,
+  readProjectFile,
+  writeProjectFile,
+  patchProjectFile,
+} from "@/app/dev-agent";
+
+import {
+  searchCodeMemory,
+  getAllCodeMemories,
+  saveCodeMemory,
+  createSmartCodeSummary,
+  detectFilePurpose,
+  setActiveCodeFile,
+  extractExports,
+  extractFunctions,
+} from "@/app/code-memory";
+
 import { saveCodeEmbedding } from "@/app/embeddings";
 import { generatePatch } from "@/app/patch-generator";
 import { rollbackFile } from "@/app/rollback";
+
+async function rememberCodeFile(filePath: string, content: string) {
+  await saveCodeMemory({
+    file_path: filePath,
+    file_purpose: detectFilePurpose(filePath, content),
+    code_summary: createSmartCodeSummary(filePath, content),
+    important_exports: extractExports(content).join(", "),
+    important_functions: extractFunctions(content).join(", "),
+    last_known_content: content.slice(0, 12000),
+  });
+
+  await saveCodeEmbedding(filePath, content);
+}
 
 export async function handleListFiles() {
   const files = await listProjectFiles();
@@ -24,28 +53,15 @@ export async function handleReadRealFile(filePath: string) {
   const content = await readProjectFile(filePath);
 
   setActiveCodeFile(filePath, content);
-
-  await saveCodeMemory({
-    file_path: filePath,
-    file_purpose: detectFilePurpose(filePath, content),
-    code_summary: createSmartCodeSummary(filePath, content),
-    last_known_content: content.slice(0, 12000),
-  });
+  await rememberCodeFile(filePath, content);
 
   return Response.json({
     reply: content,
   });
 }
 
-function createCodeSummary(content: string) {
-  const lines = content.split("\n").slice(0, 20);
-
-  return "Code summary:\n" + lines.join("\n").slice(0, 800);
-}
-
 export async function handleReadFile(filePath: string) {
   const memoryResults = await searchCodeMemory(filePath);
-
   const allCodeMemories = await getAllCodeMemories();
 
   if (memoryResults && memoryResults.length > 0) {
@@ -61,6 +77,7 @@ export async function handleReadFile(filePath: string) {
             file_path: item.file_path,
             file_purpose: item.file_purpose,
             code_summary: item.code_summary,
+            important_exports: item.important_exports,
             important_functions: item.important_functions,
           })),
           null,
@@ -71,14 +88,8 @@ export async function handleReadFile(filePath: string) {
 
   const content = await readProjectFile(filePath);
 
-  await saveCodeMemory({
-    file_path: filePath,
-    file_purpose: "Project source file",
-    code_summary: createCodeSummary(content),
-    last_known_content: content.slice(0, 3000),
-  });
-
-  await saveCodeEmbedding(filePath, content);
+  setActiveCodeFile(filePath, content);
+  await rememberCodeFile(filePath, content);
 
   return Response.json({
     reply: content,
@@ -100,6 +111,9 @@ export async function handleWriteFile(message: string) {
 
   const result = await writeProjectFile(filePath, content);
 
+  setActiveCodeFile(filePath, content);
+  await rememberCodeFile(filePath, content);
+
   return Response.json({
     reply: `Fișier modificat: ${filePath}\nBackup: ${result.backup}`,
   });
@@ -120,17 +134,10 @@ export async function handlePatchFile(message: string) {
   }
 
   const result = await patchProjectFile(filePath, searchText, replaceText);
-
   const updatedContent = await readProjectFile(filePath);
 
-  await saveCodeMemory({
-    file_path: filePath,
-    file_purpose: "Patched project file",
-    code_summary: "Updated after PATCH_FILE",
-    last_known_content: updatedContent.slice(0, 3000),
-  });
-
-  await saveCodeEmbedding(filePath, updatedContent);
+  setActiveCodeFile(filePath, updatedContent);
+  await rememberCodeFile(filePath, updatedContent);
 
   return Response.json({
     reply: `Patch aplicat: ${filePath}\nBackup: ${result.backup}`,
@@ -142,6 +149,9 @@ export async function handleAnalyzeRealFile(
   callAI: (messages: any[]) => Promise<any>
 ) {
   const content = await readProjectFile(filePath);
+
+  setActiveCodeFile(filePath, content);
+  await rememberCodeFile(filePath, content);
 
   const response = await callAI([
     {
@@ -188,11 +198,7 @@ export async function handleGeneratePatch(message: string) {
     });
   }
 
-  const patch = generatePatch(
-    filePath,
-    searchText,
-    replaceText
-  );
+  const patch = generatePatch(filePath, searchText, replaceText);
 
   return Response.json({
     reply: patch,
@@ -200,10 +206,7 @@ export async function handleGeneratePatch(message: string) {
 }
 
 export async function handleRollbackFile(filePath: string) {
-  const result = await rollbackFile(
-    filePath,
-    filePath
-  );
+  const result = await rollbackFile(filePath, filePath);
 
   return Response.json({
     reply: JSON.stringify(result, null, 2),
