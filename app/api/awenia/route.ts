@@ -358,6 +358,14 @@ Note: Image uploaded successfully.
         activeSkill,
         evolutionSuggestions.length
       );
+      console.log(
+        "AWARENESS:",
+        JSON.stringify(
+          cognitionRuntime.awarenessState,
+          null,
+          2
+        )
+      );
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
       mainFocus,
