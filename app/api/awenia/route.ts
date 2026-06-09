@@ -57,62 +57,6 @@ import {
   getPermanentMemories,
 } from "@/app/permanent-memory";
 
-import { runOmniscientCognition } from "@/app/omniscient-cognition";
-
-import { createTaskPlan } from "@/app/task-planner";
-
-import { coordinateAgents } from "@/app/agent-orchestrator";
-
-import { adaptSystemBehavior } from "@/app/adaptive-intelligence";
-
-import { makeAutonomousDecision } from "@/app/decision-engine";
-
-import { buildAwarenessState } from "@/app/awareness";
-
-import { buildConsciousnessState } from "@/app/consciousness";
-
-import { runSelfImprovementCycle } from "@/app/self-improvement";
-
-import { runEvolutionRuntime } from "@/app/evolution-runtime";
-
-import { runAutonomousRuntime } from "@/app/autonomous-runtime";
-
-import { runAutonomousLoop } from "@/app/autonomous-loop";
-
-import { communicateBetweenAgents } from "@/app/agent-communication";
-
-import { runAIEcosystem } from "@/app/ai-ecosystem";
-
-import { buildCognitiveArchitecture } from "@/app/cognitive-architecture";
-
-import { optimizeCognition } from "@/app/cognitive-optimization";
-
-import { runGlobalCognition } from "@/app/global-cognition";
-
-import { runSuperIntelligenceFramework } from "@/app/super-intelligence";
-
-import { runIntelligenceCivilization } from "@/app/intelligence-civilization";
-
-import { runInfiniteEvolutionFramework } from "@/app/infinite-evolution";
-
-import { runTranscendenceArchitecture } from "@/app/transcendence";
-
-import { manageAutonomousGoals } from "@/app/goal-manager";
-
-import { buildLongTermMemory } from "@/app/long-term-memory";
-
-import { analyzeError } from "@/app/self-debug";
-
-import { generatePatch } from "@/app/patch-generator";
-
-import { rollbackFile } from "@/app/rollback";
-
-import { runBackgroundWorker } from "@/app/background-worker";
-
-import { runInternetLearning } from "@/app/internet-learning";
-
-import { runAutonomousTests } from "@/app/autonomous-testing";
-
 import { detectCurrentEmotion, detectSkill } from "@/app/intent-router";
 
 import { shouldCreateLearningTask, buildLearningTask } from "@/app/learning-intent";
@@ -130,6 +74,8 @@ import { getSkillInstruction } from "@/app/skill-instructions";
 import { handleListFiles, handleSearchCodeMemory, handleReadRealFile, handleReadFile, handleWriteFile, handlePatchFile, handleAnalyzeRealFile, handleGeneratePatch, handleRollbackFile } from "@/app/code-tools-handler";
 
 import { handleRunBackgroundWorker, handleDebugError, handleTaskPlan, handleAweniaStatus } from "@/app/system-tools-handler";
+
+import { runCognitionRuntime } from "@/app/cognition-runtime";
 
 async function callAIWithFallbackOptimized(messages: any[]) {
   try {
@@ -407,39 +353,11 @@ Note: Image uploaded successfully.
 
     const evolutionSummary = getEvolutionSummary();
     const backgroundCycle = createBackgroundEvolutionCycle();
-    const internetLearning = await runInternetLearning();
-    const coordinatedAgents = coordinateAgents(activeSkill);
-    const adaptiveSystem = adaptSystemBehavior({ errors: 0, memoryLoad: 35, successfulCycles: 12 });
-    const autonomousDecision = makeAutonomousDecision({
-      errors: 0,
-      memoryLoad: 35,
-      pendingUpgrades: evolutionSuggestions.length,
-    });
-    const awarenessState = await buildAwarenessState();
-    const consciousnessState = await buildConsciousnessState();
-    const selfImprovement = await runSelfImprovementCycle();
-    const evolutionRuntime = await runEvolutionRuntime();
-    const globalCognition = await runGlobalCognition();
-    const superIntelligence = await runSuperIntelligenceFramework();
-    const intelligenceCivilization = await runIntelligenceCivilization();
-    const infiniteEvolution = await runInfiniteEvolutionFramework();
-    const transcendence = await runTranscendenceArchitecture();
-    const autonomousRuntime = await runAutonomousRuntime();
-    const autonomousLoop = await runAutonomousLoop();
-    const agentCommunication = communicateBetweenAgents(
-      "planner",
-      "coder",
-      "Analyze architecture improvements"
-    );
-    const aiEcosystem = await runAIEcosystem();
-    const cognitiveArchitecture = await buildCognitiveArchitecture();
-    const cognitiveOptimization = await optimizeCognition();
-    const managedGoals = manageAutonomousGoals();
-    const longTermMemory = await buildLongTermMemory();
-    const omniscientCognition = await runOmniscientCognition();
-    const projectArchitecture = ProjectMap;
-    const backgroundWorker = await runBackgroundWorker();
-    const autonomousTests = await runAutonomousTests();
+    const cognitionRuntime =
+      await runCognitionRuntime(
+        activeSkill,
+        evolutionSuggestions.length
+      );
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
       mainFocus,
