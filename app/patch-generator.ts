@@ -3,11 +3,33 @@ export function generatePatch(
   searchText: string,
   replaceText: string
 ) {
-  return `
+  const isValid =
+    filePath &&
+    searchText &&
+    replaceText &&
+    searchText !== replaceText;
+
+  return {
+    valid: isValid,
+
+    filePath,
+
+    searchText,
+
+    replaceText,
+
+    patchCommand: `
 PATCH_FILE: ${filePath}
 ---SEARCH---
 ${searchText}
 ---REPLACE---
 ${replaceText}
-  `.trim();
+`.trim(),
+
+    summary: isValid
+      ? `Replace text in ${filePath}`
+      : "Invalid patch",
+
+    timestamp: new Date().toISOString(),
+  };
 }
