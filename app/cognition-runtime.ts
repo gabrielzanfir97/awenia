@@ -97,7 +97,7 @@ export async function runCognitionRuntime(
     await optimizeCognition();
 
   const managedGoals =
-    manageAutonomousGoals();
+    await manageAutonomousGoals();
 
   const longTermMemory =
     await buildLongTermMemory();

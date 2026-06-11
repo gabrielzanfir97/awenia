@@ -135,6 +135,8 @@ async function callAIWithFallbackOptimized(messages: any[]) {
 
 export async function POST(req: Request) {
   try {
+    console.time("TOTAL_POST");
+
     const body = await req.json();
     const message = body.message || "";
     const fileName = body.fileName || "";
@@ -353,6 +355,9 @@ Note: Image uploaded successfully.
 
     const evolutionSummary = getEvolutionSummary();
     const backgroundCycle = createBackgroundEvolutionCycle();
+
+    console.time("COGNITION_RUNTIME");
+
     const cognitionRuntime =
       await runCognitionRuntime(
         activeSkill,
@@ -366,6 +371,8 @@ Note: Image uploaded successfully.
           2
         )
       );
+
+      console.timeEnd("COGNITION_RUNTIME");
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
       mainFocus,
@@ -654,6 +661,8 @@ Recommended next step: ${evolutionAnalysis.recommendedNextStep}
     console.log("ACTIVE FILE:");
     console.log(activeCodeContext.slice(0, 1000));
 
+    console.time("AI_CALL");
+
     const response = await callAIWithFallbackOptimized([
       {
         role: "system",
@@ -705,6 +714,9 @@ Emoție detectată: ${currentEmotion}
       },
     ]);
 
+    console.timeEnd("AI_CALL");
+
+
     const reply = response.choices[0].message.content || "";
     await saveChatMessage("assistant", reply);
     const codeBlockMatch = reply.match(/```(?:typescript|ts|javascript|js)?\n([\s\S]*?)```/);
@@ -746,6 +758,8 @@ Emoție detectată: ${currentEmotion}
     }
 
     await saveMemory(message, reply);
+
+    console.timeEnd("TOTAL_POST");
 
     return Response.json({
       reply,

@@ -14,7 +14,7 @@ export async function buildCognitiveArchitecture() {
     });
 
   const goals =
-    manageAutonomousGoals();
+    await manageAutonomousGoals();
 
   return {
     cognitiveArchitecture: {
