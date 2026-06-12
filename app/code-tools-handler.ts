@@ -9,7 +9,7 @@ import {
   searchCodeMemory,
   getAllCodeMemories,
   saveCodeMemory,
-  createSmartCodeSummary,
+  createImpactAwareCodeSummary,
   detectFilePurpose,
   setActiveCodeFile,
   extractExports,
@@ -24,7 +24,7 @@ async function rememberCodeFile(filePath: string, content: string) {
   await saveCodeMemory({
     file_path: filePath,
     file_purpose: detectFilePurpose(filePath, content),
-    code_summary: createSmartCodeSummary(filePath, content),
+    code_summary: await createImpactAwareCodeSummary(filePath, content),
     important_exports: extractExports(content).join(", "),
     important_functions: extractFunctions(content).join(", "),
     last_known_content: content.slice(0, 12000),

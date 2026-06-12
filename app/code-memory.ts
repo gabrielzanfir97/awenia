@@ -299,6 +299,90 @@ ${shortContent}
   `.trim();
 }
 
+export async function buildDependencyGraph() {
+  const memories =
+    await getAllCodeMemories();
+
+  const graph: Record<
+    string,
+    string[]
+  > = {};
+
+  for (const memory of memories) {
+    const summary =
+      memory.code_summary || "";
+
+    const match =
+      summary.match(
+        /Dependencies:\s*([\s\S]*?)\n\nFunctions:/i
+      );
+
+    const dependencies =
+      match?.[1]
+        ?.split(",")
+        .map((item: string) =>
+          item.trim()
+        )
+        .filter(Boolean) || [];
+
+    graph[memory.file_path] =
+      dependencies;
+  }
+
+  return graph;
+}
+
+export async function findAffectedFiles(
+  targetFile: string
+) {
+  const graph =
+    await buildDependencyGraph();
+
+  const affected: string[] = [];
+
+  for (const [file, dependencies] of Object.entries(graph)) {
+    const normalizedDependencies =
+      dependencies.map((dep) =>
+        dep.replace(".ts", "")
+      );
+
+    const normalizedTarget =
+      targetFile.replace(".ts", "");
+
+    if (
+      normalizedDependencies.some(
+        (dep) =>
+          dep.includes(normalizedTarget) ||
+          normalizedTarget.includes(dep)
+      )
+    ) {
+      affected.push(file);
+    }
+  }
+
+  return affected;
+}
+
+export async function createImpactAwareCodeSummary(
+  filePath: string,
+  content: string
+) {
+  const summary = createSmartCodeSummary(filePath, content);
+  const affectedFiles = await findAffectedFiles(filePath);
+
+  return `
+${summary}
+
+Dynamic Impact Analysis:
+Affected files:
+${
+  affectedFiles.length
+    ? affectedFiles.join(", ")
+    : "none detected"
+}
+  `.trim();
+}
+
 let activeCodeFile: {
   file_path: string;
   content: string;
