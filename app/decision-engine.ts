@@ -5,6 +5,15 @@ export function makeAutonomousDecision(systemState: {
   weakSkills?: string[];
   activeGoals?: number;
 }) {
+  const scores = {
+    debug: 0,
+    coding: 0,
+    memory: 0,
+    upgrade: 0,
+    goal: 0,
+    monitor: 1,
+  };
+
   const errors = systemState.errors || 0;
   const memoryLoad = systemState.memoryLoad || 0;
   const pendingUpgrades =
@@ -16,49 +25,72 @@ export function makeAutonomousDecision(systemState: {
   const activeGoals =
     systemState.activeGoals || 0;
 
-  if (errors > 0) {
-    return {
-      priority: "debug",
-      action: "Run debugger workflow",
-      reason: "System errors detected",
-    };
-  }
+  scores.debug += errors * 100;
 
   if (weakSkills.includes("coding")) {
+    scores.coding += 80;
+  }
+
+  scores.memory += Math.floor(memoryLoad);
+
+  scores.upgrade += pendingUpgrades * 15;
+
+  scores.goal += activeGoals * 10;
+
+  const winner = Object.entries(scores)
+    .sort((a, b) => b[1] - a[1])[0];
+
+  const priority = winner[0];
+
+  if (priority === "debug") {
     return {
-      priority: "coding",
+      priority,
+      action: "Run debugger workflow",
+      reason: `Detected ${errors} system errors`,
+      scores,
+    };
+  }
+
+  if (priority === "coding") {
+    return {
+      priority,
       action: "Improve coding ability",
-      reason: "Coding identified as weak skill",
+      reason: "Coding skill requires improvement",
+      scores,
     };
   }
 
-  if (memoryLoad > 80) {
+  if (priority === "memory") {
     return {
-      priority: "memory",
+      priority,
       action: "Run memory optimization",
-      reason: "Memory load is high",
+      reason: `Memory load is ${memoryLoad}%`,
+      scores,
     };
   }
 
-  if (pendingUpgrades > 0) {
+  if (priority === "upgrade") {
     return {
-      priority: "upgrade",
+      priority,
       action: "Review evolution suggestions",
-      reason: "Pending upgrades detected",
+      reason: `${pendingUpgrades} upgrades pending`,
+      scores,
     };
   }
 
-  if (activeGoals > 0) {
+  if (priority === "goal") {
     return {
-      priority: "goal",
+      priority,
       action: "Continue active goals",
-      reason: "Active goals available",
+      reason: `${activeGoals} active goals detected`,
+      scores,
     };
   }
 
   return {
     priority: "monitor",
     action: "Continue autonomous monitoring",
-    reason: "No higher priority detected",
+    reason: "System appears stable",
+    scores,
   };
 }

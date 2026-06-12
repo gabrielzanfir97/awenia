@@ -40,6 +40,34 @@ export async function buildAwarenessState() {
       priorityScore: item.priorityScore,
     }));
 
+  let primaryProblem = "none_detected";
+
+  if (weakSkills.length > 0) {
+    primaryProblem = `Weak skills detected: ${weakSkills.join(", ")}`;
+  } else if (pendingUpgrades.length > 0) {
+    primaryProblem = "Pending evolution suggestions need review";
+  } else if (activeGoals.length === 0) {
+    primaryProblem = "No active goals detected";
+  }
+
+  let recommendedAction = "Continue monitoring";
+
+  if (weakSkills.includes("coding")) {
+    recommendedAction =
+      "Improve coding ability using real project files";
+  } else if (pendingUpgrades.length > 0) {
+    recommendedAction =
+      "Review evolution suggestions";
+  } else if (activeGoals.length > 0) {
+    recommendedAction =
+      `Continue goal: ${activeGoals[0].goal}`;
+  }
+
+  const awarenessScore =
+    100 -
+    weakSkills.length * 10 -
+    pendingUpgrades.length * 2;
+
   return {
     awareness: {
       active: true,
@@ -78,14 +106,16 @@ export async function buildAwarenessState() {
         approved: item.approved,
       })),
 
-      nextPriority:
-        weakSkills.includes("coding")
-          ? "Improve coding ability with real project files"
-          : pendingUpgrades.length > 0
-          ? "Review pending evolution suggestions"
-          : activeGoals.length > 0
-          ? "Continue active autonomous goals"
-          : "Continue autonomous monitoring",
+      primaryProblem,
+
+      recommendedAction,
+
+      awarenessScore: Math.max(
+        0,
+        Math.min(100, awarenessScore)
+      ),
+
+      nextPriority: recommendedAction,
     },
 
     timestamp: new Date().toISOString(),

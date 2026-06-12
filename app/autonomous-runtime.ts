@@ -2,7 +2,13 @@ import { buildAwarenessState } from "./awareness";
 import { makeAutonomousDecision } from "./decision-engine";
 import { coordinateAgents } from "./agent-orchestrator";
 
+import {
+  createAutonomousReflection,
+  createEvolutionSuggestion,
+} from "./memory-store";
+
 export async function runAutonomousRuntime() {
+  console.log("AUTONOMOUS_RUNTIME_RUNNING");
   const awareness =
     await buildAwarenessState();
 
@@ -29,6 +35,22 @@ export async function runAutonomousRuntime() {
       decision.priority
     );
 
+  if (decision.priority !== "monitor") {
+    await createAutonomousReflection(
+      `Autonomous runtime selected priority: ${decision.priority}`,
+      awareness.awareness.primaryProblem || "No primary problem detected",
+      decision.action
+    );
+  }
+
+  if (pendingUpgrades > 0) {
+    await createEvolutionSuggestion(
+      "Review pending autonomous upgrades",
+      "Autonomous runtime detected pending evolution suggestions",
+      7
+    );
+  }
+
   return {
     status: "active",
 
@@ -43,6 +65,17 @@ export async function runAutonomousRuntime() {
       monitoring: true,
       learning: true,
       selfImprovement: true,
+      actionTaken:
+        decision.priority !== "monitor",
+    },
+
+    runtimeAnalysis: {
+      primaryProblem:
+        awareness.awareness.primaryProblem,
+      recommendedAction:
+        awareness.awareness.recommendedAction,
+      awarenessScore:
+        awareness.awareness.awarenessScore,
     },
 
     timestamp: new Date().toISOString(),
