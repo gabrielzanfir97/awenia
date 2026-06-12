@@ -21,8 +21,31 @@ export async function learnFromInternet(topic: string) {
 }
 
 export async function runInternetLearning() {
+  const { data } = await supabase
+    .from("internet_learning")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  const learnedTopics =
+    (data || []).map(
+      (item: any) => item.topic
+    );
+
   return {
     status: "learning",
+
+    learningState: {
+      totalLearnedTopics:
+        learnedTopics.length,
+
+      latestTopics:
+        learnedTopics.slice(0, 5),
+
+      hasLearningHistory:
+        learnedTopics.length > 0,
+    },
+
     sources: [
       "Wikipedia",
       "Open knowledge",
@@ -30,6 +53,8 @@ export async function runInternetLearning() {
       "Programming patterns",
       "Architecture analysis",
     ],
-    timestamp: new Date().toISOString(),
+
+    timestamp:
+      new Date().toISOString(),
   };
 }
