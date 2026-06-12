@@ -12,6 +12,23 @@ export async function runCognitiveEvolutionNetwork() {
   const expansion =
     await expandIntelligence();
 
+  const architectureHealth =
+    architecture.cognitiveArchitecture
+      .architectureAnalysis?.architectureHealth ||
+    "unknown";
+
+  const awarenessScore =
+    architecture.cognitiveArchitecture
+      .architectureAnalysis?.awarenessScore || 0;
+
+  const optimizationScore =
+    optimization.cognitiveOptimization
+      ?.optimizationScore || 0;
+
+  const evolutionReadiness =
+    awarenessScore >= 70 &&
+    optimizationScore >= 70;
+
   return {
     cognitiveEvolutionNetwork: {
       active: true,
@@ -23,10 +40,17 @@ export async function runCognitiveEvolutionNetwork() {
       },
 
       evolution: {
-        adaptive: true,
-        autonomous: true,
+        adaptive: awarenessScore > 40,
+        autonomous: evolutionReadiness,
         continuous: true,
         protected: true,
+      },
+
+      evolutionAnalysis: {
+        architectureHealth,
+        awarenessScore,
+        optimizationScore,
+        evolutionReadiness,
       },
 
       networkGoals: [

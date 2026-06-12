@@ -4,21 +4,44 @@ export async function runMetaCognition() {
   const reasoning =
     await runReasoningNetwork();
 
+  const analysis =
+    reasoning.reasoningNetwork.reasoningAnalysis;
+
+  const awarenessScore =
+    analysis.awarenessScore || 0;
+
+  const reasoningQuality =
+    awarenessScore >= 80
+      ? "strong"
+      : awarenessScore >= 60
+      ? "developing"
+      : "needs_attention";
+
   return {
     metaCognition: {
       active: true,
 
       selfAnalysis: {
-        reasoningQuality: "stable",
-        awarenessLevel: "high",
-        adaptiveState: "learning",
+        reasoningQuality,
+
+        awarenessLevel:
+          awarenessScore >= 80
+            ? "high"
+            : awarenessScore >= 60
+            ? "medium"
+            : "low",
+
+        adaptiveState:
+          analysis.stalledGoals > 0
+            ? "recovering"
+            : "learning",
       },
 
       observations: [
-        "Monitor reasoning efficiency",
-        "Detect weak cognitive workflows",
-        "Optimize autonomous coordination",
-        "Improve long-term intelligence",
+        `Awareness score: ${awarenessScore}`,
+        `Active goals: ${analysis.goalCount}`,
+        `Stalled goals: ${analysis.stalledGoals}`,
+        analysis.recommendedReasoningAction,
       ],
 
       reasoning,

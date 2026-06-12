@@ -9,6 +9,12 @@ export async function runDistributedIntelligence() {
   const evolution =
     await runCognitiveEvolutionNetwork();
 
+  const agentCount =
+    Object.keys(Agents).length;
+
+  const reasoningActive =
+    reasoning.reasoningNetwork?.active || false;
+
   return {
     distributedIntelligence: {
       active: true,
@@ -16,10 +22,15 @@ export async function runDistributedIntelligence() {
       agents: Object.keys(Agents),
 
       intelligence: {
-        distributed: true,
-        autonomous: true,
+        distributed: agentCount > 1,
+        autonomous: reasoningActive,
         adaptive: true,
         persistent: true,
+      },
+
+      metrics: {
+        agentCount,
+        reasoningActive,
       },
 
       reasoning,

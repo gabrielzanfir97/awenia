@@ -12,15 +12,37 @@ export async function runGlobalCognition() {
   const consciousness =
     await buildConsciousnessState();
 
+  const state =
+    consciousness.consciousness.state;
+
+  const awarenessScore =
+    consciousness.consciousness.selfUnderstanding
+      ?.awarenessScore || 0;
+
+  const primaryProblem =
+    consciousness.consciousness.selfUnderstanding
+      ?.primaryProblem || "none_detected";
+
+  const recommendedAction =
+    consciousness.consciousness.selfUnderstanding
+      ?.recommendedAction || "Continue monitoring";
+
   return {
     globalCognition: {
       active: true,
 
       cognition: {
-        unified: true,
-        autonomous: true,
-        adaptive: true,
+        unified: awarenessScore > 50,
+        autonomous: state !== "needs_attention",
+        adaptive: awarenessScore > 40,
         persistent: true,
+      },
+
+      health: {
+        state,
+        awarenessScore,
+        primaryProblem,
+        recommendedAction,
       },
 
       systems: {

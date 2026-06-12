@@ -12,6 +12,23 @@ export async function runAIEcosystem() {
   const evolution =
     await runEvolutionRuntime();
 
+  const consciousnessState =
+    consciousness.consciousness.state;
+
+  const awarenessScore =
+    consciousness.consciousness.selfUnderstanding
+      ?.awarenessScore || 0;
+
+  const distributedActive =
+    distributed.distributedIntelligence.active;
+
+  const ecosystemHealth =
+    awarenessScore >= 80
+      ? "strong"
+      : awarenessScore >= 60
+      ? "developing"
+      : "needs_attention";
+
   return {
     aiEcosystem: {
       active: true,
@@ -23,11 +40,18 @@ export async function runAIEcosystem() {
       },
 
       ecosystemState: {
-        autonomous: true,
+        autonomous: distributedActive,
         persistent: true,
-        adaptive: true,
+        adaptive: awarenessScore > 40,
         protected: true,
-        evolving: true,
+        evolving: evolution.status === "evolving",
+      },
+
+      ecosystemAnalysis: {
+        health: ecosystemHealth,
+        consciousnessState,
+        awarenessScore,
+        distributedActive,
       },
 
       activeProcesses: [

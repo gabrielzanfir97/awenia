@@ -12,16 +12,39 @@ export async function optimizeCognition() {
       successfulCycles: 20,
     });
 
+  const awarenessLevel =
+    meta.metaCognition.selfAnalysis.awarenessLevel;
+
+  const reasoningQuality =
+    meta.metaCognition.selfAnalysis.reasoningQuality;
+
   return {
     cognitiveOptimization: {
       active: true,
 
       optimizations: {
-        reasoning: "improving",
-        memory: "optimized",
-        workflows: "adaptive",
-        coordination: "stable",
+        reasoning: reasoningQuality,
+
+        memory:
+          awarenessLevel === "high"
+            ? "optimized"
+            : "needs_review",
+
+        workflows:
+          adaptive.adaptiveMode|| "adaptive",
+
+        coordination:
+          awarenessLevel === "high"
+            ? "stable"
+            : "developing",
       },
+
+      optimizationScore:
+        awarenessLevel === "high"
+          ? 90
+          : awarenessLevel === "medium"
+          ? 70
+          : 50,
 
       meta,
 
