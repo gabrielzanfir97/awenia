@@ -363,12 +363,59 @@ export async function findAffectedFiles(
   return affected;
 }
 
+export async function createModificationPlan(
+  targetFile: string
+) {
+  const affectedFiles =
+    await findAffectedFiles(targetFile);
+
+  const plan = [
+    {
+      step: 1,
+      action: `Review ${targetFile}`,
+    },
+  ];
+
+  affectedFiles.forEach(
+    (file, index) => {
+      plan.push({
+        step: index + 2,
+        action: `Review dependent file: ${file}`,
+      });
+    }
+  );
+
+  plan.push({
+    step: plan.length + 1,
+    action: "Run build validation",
+  });
+
+  return {
+    targetFile,
+    affectedFiles,
+    totalAffected:
+      affectedFiles.length,
+
+    risk:
+      affectedFiles.length >= 4
+        ? "critical"
+        : affectedFiles.length >= 2
+        ? "high"
+        : affectedFiles.length >= 1
+        ? "medium"
+        : "low",
+
+    plan,
+  };
+}
+
 export async function createImpactAwareCodeSummary(
   filePath: string,
   content: string
 ) {
   const summary = createSmartCodeSummary(filePath, content);
   const affectedFiles = await findAffectedFiles(filePath);
+  const modificationPlan = await createModificationPlan(filePath);
 
   return `
 ${summary}
@@ -379,6 +426,16 @@ ${
   affectedFiles.length
     ? affectedFiles.join(", ")
     : "none detected"
+}
+
+Modification Plan:
+${
+  modificationPlan.plan
+    .map(
+      (step) =>
+        `${step.step}. ${step.action}`
+    )
+    .join("\n")
 }
   `.trim();
 }
