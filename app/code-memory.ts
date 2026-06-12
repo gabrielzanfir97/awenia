@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import { getProjectArea } from "./project-map";
+import { getProjectArea,getImpactAnalysis, } from "./project-map";
 
 export type CodeMemoryData = {
   file_path: string;
@@ -225,6 +225,8 @@ export function createSmartCodeSummary(
   content: string
 ) {
   const projectArea = getProjectArea(filePath);
+  const impact = getImpactAnalysis(filePath);
+
   const purpose = detectFilePurpose(filePath, content);
 
   const imports = extractImports(content);
@@ -248,6 +250,18 @@ export function createSmartCodeSummary(
 Project area: ${projectArea.area}
 Project risk: ${projectArea.risk}
 Area purpose: ${projectArea.purpose}
+
+Impact level: ${impact.impactLevel}
+
+Affected files:
+${
+  impact.affectedFiles.length
+    ? impact.affectedFiles.join(", ")
+    : "none detected"
+}
+
+Recommendation:
+${impact.recommendation}
 
 Purpose: ${purpose}
 Risk level: ${riskLevel}
