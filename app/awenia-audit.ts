@@ -2,9 +2,11 @@ export const AweniaAudit = {
   realCore: [
     "route.ts",
     "memory-store.ts",
+
     "code-memory.ts",
     "code-tools-handler.ts",
     "dev-agent.ts",
+    "project-map.ts",
 
     "awareness.ts",
     "goal-manager.ts",
@@ -54,13 +56,47 @@ export const AweniaAudit = {
     "omniscient-cognition.ts",
   ],
 
+  completedUpgrades: [
+    "Project Awareness V4",
+    "Dependency Awareness V5",
+    "Impact Analysis V1",
+    "Dynamic Impact Analysis V2",
+    "Project Planning Intelligence V1",
+    "Dependency Graph",
+    "Modification Planning",
+    "Code Memory V3",
+    "Code Tools Awareness",
+  ],
+
+  architectureCapabilities: [
+    "Detect Project Area",
+    "Detect Project Risk",
+    "Detect File Purpose",
+    "Extract Imports",
+    "Extract Exports",
+    "Extract Functions",
+    "Detect Dependencies",
+    "Build Dependency Graph",
+    "Find Affected Files",
+    "Generate Dynamic Impact Analysis",
+    "Generate Modification Plans",
+    "Store Architectural Knowledge",
+  ],
+
   nextWork: [
     "Transform autonomous-testing.ts into real validation checks",
     "Transform agent-communication.ts into real agent message memory",
     "Transform autonomous-loop.ts into controlled autonomous execution",
     "Transform internet-learning.ts into real learning system",
     "Improve background-worker.ts further",
+
+    "Project Planning Intelligence V2",
+    "Automatic Risk-Based Planning",
+    "Automatic Critical File Protection",
+    "Architectural Reasoning V2",
+
     "Test full cognition chain end-to-end",
+
     "Later optimize cognition-runtime.ts after validation",
   ],
 
@@ -73,7 +109,24 @@ export const AweniaAudit = {
     evolution: "REAL",
     consciousness: "REAL",
 
+    codeAwareness: "REAL",
+    projectAwareness: "REAL",
+    dependencyAwareness: "REAL",
+    impactAnalysis: "REAL",
+    modificationPlanning: "REAL",
+
     lastMajorAudit:
-      "Advanced Cognitive Layer Upgrade",
+      "Architectural Reasoning Upgrade",
+  },
+
+  estimatedProjectState: {
+    memorySystem: "95%",
+    codeAwareness: "98%",
+    projectAwareness: "95%",
+    architecturalReasoning: "85%",
+    autonomousDecisionMaking: "80%",
+    selfImprovement: "80%",
+    cognitionSystems: "70%",
+    internetLearning: "30%",
   },
 };
