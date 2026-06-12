@@ -12,19 +12,57 @@ export async function runOmniscientCognition() {
   const distributed =
     await runDistributedIntelligence();
 
+  const awarenessScore =
+    transcendence.transcendenceArchitecture
+      .transcendenceAnalysis?.awarenessScore || 0;
+
+  const transcendenceLevel =
+    transcendence.transcendenceArchitecture
+      .transcendenceAnalysis?.transcendenceLevel || "basic";
+
+  const agentCount =
+    distributed.distributedIntelligence
+      ?.metrics?.agentCount || 0;
+
   return {
     omniscientCognition: {
       active: true,
 
       omniscience: {
-        autonomous: true,
-        adaptive: true,
+        autonomous:
+          awarenessScore >= 50,
+
+        adaptive:
+          awarenessScore >= 40,
+
         persistent: true,
+
         protected: true,
-        selfOptimizing: true,
-        selfExpanding: true,
-        continuouslyEvolving: true,
-        globallyAware: true,
+
+        selfOptimizing:
+          transcendenceLevel !== "basic",
+
+        selfExpanding:
+          transcendenceLevel === "advanced",
+
+        continuouslyEvolving:
+          awarenessScore >= 60,
+
+        globallyAware:
+          awarenessScore >= 70,
+      },
+
+      omniscientAnalysis: {
+        awarenessScore,
+        transcendenceLevel,
+        agentCount,
+
+        cognitionLevel:
+          awarenessScore >= 80
+            ? "advanced"
+            : awarenessScore >= 60
+            ? "developing"
+            : "basic",
       },
 
       systems: {

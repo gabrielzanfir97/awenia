@@ -12,17 +12,44 @@ export async function runSuperIntelligenceFramework() {
   const expansion =
     await expandIntelligence();
 
+  const health =
+    selfSustaining.selfSustainingSystem
+      .sustainabilityAnalysis?.health || "unknown";
+
+  const awarenessScore =
+    selfSustaining.selfSustainingSystem
+      .sustainabilityAnalysis?.awarenessScore || 0;
+
+  const expansionReadiness =
+    expansion.intelligenceExpansion
+      .expansionAnalysis?.expansionReadiness || false;
+
   return {
     superIntelligenceFramework: {
       active: true,
 
       framework: {
-        autonomous: true,
-        adaptive: true,
+        autonomous: awarenessScore >= 50,
+        adaptive: awarenessScore >= 40,
         persistent: true,
         protected: true,
-        selfOptimizing: true,
-        selfExpanding: true,
+        selfOptimizing:
+          health !== "needs_attention",
+        selfExpanding:
+          expansionReadiness,
+      },
+
+      frameworkAnalysis: {
+        health,
+        awarenessScore,
+        expansionReadiness,
+
+        level:
+          awarenessScore >= 80
+            ? "advanced"
+            : awarenessScore >= 60
+            ? "developing"
+            : "basic",
       },
 
       systems: {

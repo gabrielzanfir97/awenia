@@ -12,18 +12,54 @@ export async function runTranscendenceArchitecture() {
   const distributed =
     await runDistributedIntelligence();
 
+  const awarenessScore =
+    infiniteEvolution.infiniteEvolutionFramework
+      .evolutionAnalysis?.awarenessScore || 0;
+
+  const evolutionStage =
+    infiniteEvolution.infiniteEvolutionFramework
+      .evolutionAnalysis?.evolutionStage || "basic";
+
+  const agentCount =
+    distributed.distributedIntelligence
+      ?.metrics?.agentCount || 0;
+
   return {
     transcendenceArchitecture: {
       active: true,
 
       transcendence: {
-        autonomous: true,
-        adaptive: true,
+        autonomous:
+          awarenessScore >= 50,
+
+        adaptive:
+          awarenessScore >= 40,
+
         persistent: true,
+
         protected: true,
-        selfOptimizing: true,
-        selfExpanding: true,
-        continuouslyEvolving: true,
+
+        selfOptimizing:
+          evolutionStage !== "basic",
+
+        selfExpanding:
+          evolutionStage === "advanced",
+
+        continuouslyEvolving:
+          awarenessScore >= 60,
+      },
+
+      transcendenceAnalysis: {
+        awarenessScore,
+        evolutionStage,
+        agentCount,
+
+        transcendenceLevel:
+          awarenessScore >= 80
+            ? "advanced"
+            : awarenessScore >= 60
+            ? "developing"
+            : "basic",
       },
 
       systems: {

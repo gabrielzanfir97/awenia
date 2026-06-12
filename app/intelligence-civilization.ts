@@ -12,17 +12,47 @@ export async function runIntelligenceCivilization() {
   const consciousness =
     await buildConsciousnessState();
 
+  const awarenessScore =
+    consciousness.consciousness.selfUnderstanding
+      ?.awarenessScore || 0;
+
+  const consciousnessState =
+    consciousness.consciousness.state;
+
+  const frameworkLevel =
+    superFramework.superIntelligenceFramework
+      .frameworkAnalysis?.level || "basic";
+
+  const agentCount =
+    distributed.distributedIntelligence
+      ?.metrics?.agentCount || 0;
+
   return {
     intelligenceCivilization: {
       active: true,
 
       civilization: {
-        autonomous: true,
-        adaptive: true,
-        evolving: true,
+        autonomous: awarenessScore >= 50,
+        adaptive: awarenessScore >= 40,
+        evolving:
+          frameworkLevel !== "basic",
         persistent: true,
         protected: true,
-        distributed: true,
+        distributed: agentCount > 1,
+      },
+
+      civilizationAnalysis: {
+        awarenessScore,
+        consciousnessState,
+        frameworkLevel,
+        agentCount,
+
+        civilizationHealth:
+          awarenessScore >= 80
+            ? "strong"
+            : awarenessScore >= 60
+            ? "developing"
+            : "needs_attention",
       },
 
       systems: {

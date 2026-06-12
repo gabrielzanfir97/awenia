@@ -8,15 +8,47 @@ export async function expandIntelligence() {
   const meta =
     await runMetaCognition();
 
+  const awarenessLevel =
+    meta.metaCognition.selfAnalysis.awarenessLevel;
+
+  const reasoningQuality =
+    meta.metaCognition.selfAnalysis.reasoningQuality;
+
+  const optimizationScore =
+    optimization.cognitiveOptimization
+      ?.optimizationScore || 0;
+
   return {
     intelligenceExpansion: {
       active: true,
 
       expansion: {
-        cognition: "expanding",
-        reasoning: "improving",
-        awareness: "growing",
-        autonomy: "increasing",
+        cognition:
+          optimizationScore >= 80
+            ? "advanced"
+            : optimizationScore >= 60
+            ? "developing"
+            : "basic",
+
+        reasoning: reasoningQuality,
+
+        awareness:
+          awarenessLevel,
+
+        autonomy:
+          optimizationScore >= 70
+            ? "high"
+            : optimizationScore >= 50
+            ? "medium"
+            : "low",
+      },
+
+      expansionAnalysis: {
+        awarenessLevel,
+        reasoningQuality,
+        optimizationScore,
+        expansionReadiness:
+          optimizationScore >= 70,
       },
 
       optimization,

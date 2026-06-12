@@ -12,16 +12,47 @@ export async function runSelfSustainingSystem() {
   const consciousness =
     await buildConsciousnessState();
 
+  const awarenessScore =
+    consciousness.consciousness.selfUnderstanding
+      ?.awarenessScore || 0;
+
+  const consciousnessState =
+    consciousness.consciousness.state;
+
+  const intelligenceLevel =
+    core.unifiedIntelligenceCore.coreAnalysis
+      ?.intelligenceLevel || "basic";
+
   return {
     selfSustainingSystem: {
       active: true,
 
       sustainability: {
-        autonomous: true,
-        adaptive: true,
+        autonomous:
+          awarenessScore >= 50,
+
+        adaptive:
+          awarenessScore >= 40,
+
         persistent: true,
+
         protected: true,
-        evolving: true,
+
+        evolving:
+          evolution.status === "evolving",
+      },
+
+      sustainabilityAnalysis: {
+        awarenessScore,
+        consciousnessState,
+        intelligenceLevel,
+
+        health:
+          awarenessScore >= 80
+            ? "strong"
+            : awarenessScore >= 60
+            ? "developing"
+            : "needs_attention",
       },
 
       systems: {

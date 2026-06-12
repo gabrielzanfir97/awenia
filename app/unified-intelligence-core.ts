@@ -12,16 +12,40 @@ export async function runUnifiedIntelligenceCore() {
   const consciousness =
     await buildConsciousnessState();
 
+  const awarenessScore =
+    consciousness.consciousness.selfUnderstanding
+      ?.awarenessScore || 0;
+
+  const state =
+    consciousness.consciousness.state;
+
+  const ecosystemHealth =
+    ecosystem.aiEcosystem.ecosystemAnalysis
+      ?.health || "unknown";
+
   return {
     unifiedIntelligenceCore: {
       active: true,
 
       intelligence: {
-        unified: true,
-        autonomous: true,
-        adaptive: true,
+        unified: awarenessScore >= 50,
+        autonomous: state !== "needs_attention",
+        adaptive: awarenessScore >= 40,
         persistent: true,
         protected: true,
+      },
+
+      coreAnalysis: {
+        awarenessScore,
+        consciousnessState: state,
+        ecosystemHealth,
+
+        intelligenceLevel:
+          awarenessScore >= 80
+            ? "advanced"
+            : awarenessScore >= 60
+            ? "developing"
+            : "basic",
       },
 
       systems: {
