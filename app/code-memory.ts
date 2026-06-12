@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { getProjectArea } from "./project-map";
 
 export type CodeMemoryData = {
   file_path: string;
@@ -85,6 +86,14 @@ export function extractImports(content: string) {
   ];
 
   return matches.map((match) => match[1]);
+}
+
+export function detectDependencies(content: string) {
+  const imports = extractImports(content);
+
+  return imports.map((item) =>
+    item.replace("./", "app/")
+  );
 }
 
 export function extractExports(content: string) {
@@ -211,29 +220,65 @@ export function detectRiskLevel(filePath: string, content: string) {
   return "low";
 }
 
-export function createSmartCodeSummary(filePath: string, content: string) {
+export function createSmartCodeSummary(
+  filePath: string,
+  content: string
+) {
+  const projectArea = getProjectArea(filePath);
   const purpose = detectFilePurpose(filePath, content);
+
   const imports = extractImports(content);
   const exports = extractExports(content);
   const functions = extractFunctions(content);
-  const riskLevel = detectRiskLevel(filePath, content);
+  const dependencies =
+    detectDependencies(content);
 
-  const cleaned = normalizeCode(content);
+  const riskLevel =
+    detectRiskLevel(filePath, content);
+
+  const cleaned =
+    normalizeCode(content);
+
   const shortContent =
-    cleaned.length > 500 ? cleaned.slice(0, 500) + "..." : cleaned;
+    cleaned.length > 500
+      ? cleaned.slice(0, 500) + "..."
+      : cleaned;
 
   return `
+Project area: ${projectArea.area}
+Project risk: ${projectArea.risk}
+Area purpose: ${projectArea.purpose}
+
 Purpose: ${purpose}
 Risk level: ${riskLevel}
 
 Imports:
-${imports.length ? imports.join(", ") : "none detected"}
+${
+  imports.length
+    ? imports.join(", ")
+    : "none detected"
+}
 
 Exports:
-${exports.length ? exports.join(", ") : "none detected"}
+${
+  exports.length
+    ? exports.join(", ")
+    : "none detected"
+}
+
+Dependencies:
+${
+  dependencies.length
+    ? dependencies.join(", ")
+    : "none detected"
+}
 
 Functions:
-${functions.length ? functions.join(", ") : "none detected"}
+${
+  functions.length
+    ? functions.join(", ")
+    : "none detected"
+}
 
 Main logic:
 ${shortContent}
