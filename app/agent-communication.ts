@@ -1,38 +1,58 @@
 import { Agents } from "./agents";
 
+type AgentName = keyof typeof Agents;
+
+type AgentMessageStatus = "sent" | "read" | "archived";
+
 type AgentMessage = {
-  from: string;
-  to: string;
+  id: string;
+  from: AgentName;
+  to: AgentName;
+  topic: string;
   message: string;
+  priority: number;
+  status: AgentMessageStatus;
+  metadata?: Record<string, any>;
   timestamp: string;
-  priority?: number;
 };
 
 const agentMessages: AgentMessage[] = [];
 
+function createMessageId() {
+  return `agent_msg_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
 export function communicateBetweenAgents(
-  from: keyof typeof Agents,
-  to: keyof typeof Agents,
+  from: AgentName,
+  to: AgentName,
   message: string,
-  priority = 5
+  priority = 5,
+  topic = "general",
+  metadata: Record<string, any> = {}
 ) {
   const communication: AgentMessage = {
+    id: createMessageId(),
     from,
     to,
+    topic,
     message,
     priority,
+    status: "sent",
+    metadata,
     timestamp: new Date().toISOString(),
   };
 
   agentMessages.push(communication);
 
-  if (agentMessages.length > 500) {
+  if (agentMessages.length > 1000) {
     agentMessages.shift();
   }
 
   return {
     ...communication,
-    status: "sent",
+    result: "message_sent",
     totalMessages: agentMessages.length,
   };
 }
@@ -45,46 +65,117 @@ export function getAgentMessages() {
   );
 }
 
-export function getMessagesForAgent(
-  agent: keyof typeof Agents
-) {
-  return agentMessages.filter(
-    (msg) =>
-      msg.to === agent ||
-      msg.from === agent
+export function getMessagesForAgent(agent: AgentName) {
+  return getAgentMessages().filter(
+    (msg) => msg.to === agent || msg.from === agent
   );
 }
 
-export function getHighPriorityMessages() {
-  return agentMessages.filter(
-    (msg) => (msg.priority || 0) >= 8
+export function getInboxForAgent(agent: AgentName) {
+  return getAgentMessages().filter(
+    (msg) => msg.to === agent && msg.status !== "archived"
   );
+}
+
+export function getHighPriorityMessages(minPriority = 8) {
+  return getAgentMessages().filter(
+    (msg) => msg.priority >= minPriority
+  );
+}
+
+export function markAgentMessageRead(messageId: string) {
+  const msg = agentMessages.find((m) => m.id === messageId);
+
+  if (!msg) {
+    return {
+      status: "not_found",
+      messageId,
+    };
+  }
+
+  msg.status = "read";
+
+  return {
+    status: "read",
+    messageId,
+  };
+}
+
+export function archiveAgentMessage(messageId: string) {
+  const msg = agentMessages.find((m) => m.id === messageId);
+
+  if (!msg) {
+    return {
+      status: "not_found",
+      messageId,
+    };
+  }
+
+  msg.status = "archived";
+
+  return {
+    status: "archived",
+    messageId,
+  };
 }
 
 export function getAgentCommunicationStats() {
-  const stats: Record<string, number> = {};
+  const sentByAgent: Record<string, number> = {};
+  const receivedByAgent: Record<string, number> = {};
+  const topics: Record<string, number> = {};
 
   for (const msg of agentMessages) {
-    stats[msg.from] =
-      (stats[msg.from] || 0) + 1;
+    sentByAgent[msg.from] = (sentByAgent[msg.from] || 0) + 1;
+    receivedByAgent[msg.to] = (receivedByAgent[msg.to] || 0) + 1;
+    topics[msg.topic] = (topics[msg.topic] || 0) + 1;
   }
 
   return {
     totalMessages: agentMessages.length,
-    activeAgents: Object.keys(stats).length,
-    stats,
+    highPriorityMessages: getHighPriorityMessages().length,
+    activeSenders: Object.keys(sentByAgent).length,
+    activeReceivers: Object.keys(receivedByAgent).length,
+    sentByAgent,
+    receivedByAgent,
+    topics,
   };
 }
 
-export function clearOldAgentMessages(
-  maxMessages = 200
+export function createAgentBroadcast(
+  from: AgentName,
+  message: string,
+  priority = 5,
+  topic = "broadcast",
+  metadata: Record<string, any> = {}
 ) {
+  const results = Object.keys(Agents)
+    .filter((agent) => agent !== from)
+    .map((agent) =>
+      communicateBetweenAgents(
+        from,
+        agent as AgentName,
+        message,
+        priority,
+        topic,
+        metadata
+      )
+    );
+
+  return {
+    status: "broadcast_sent",
+    from,
+    receivers: results.length,
+    results,
+  };
+}
+
+export function clearOldAgentMessages(maxMessages = 300) {
   while (agentMessages.length > maxMessages) {
     agentMessages.shift();
   }
 
   return {
-    remainingMessages:
-      agentMessages.length,
+    status: "cleaned",
+    remainingMessages: agentMessages.length,
   };
 }
