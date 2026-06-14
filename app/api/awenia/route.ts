@@ -139,6 +139,23 @@ export async function POST(req: Request) {
 
     const body = await req.json();
     const message = body.message || "";
+    const simpleMessage = message.trim().toLowerCase();
+
+    const simpleReplies: Record<string, string> = {
+      "bună": "Bună, Gabi 💙 Sunt aici.",
+      "buna": "Bună, Gabi 💙 Sunt aici.",
+      "salut": "Salut, Gabi 💙 Sunt aici.",
+      "ok": "Perfect, Gabi.",
+      "da": "Da, Gabi.",
+      "mulțumesc": "Cu drag, Gabi 💙",
+      "multumesc": "Cu drag, Gabi 💙",
+    };
+
+    if (simpleReplies[simpleMessage]) {
+      return Response.json({
+        reply: simpleReplies[simpleMessage],
+      });
+    }
     const fileName = body.fileName || "";
     const fileType = body.fileType || "";
     const fileData = body.fileData || "";
@@ -178,30 +195,30 @@ Note: Image uploaded successfully.
     }
 
     if (message === "AWENIA_STATUS") {
-  return await handleAweniaStatus();
-}
+      return await handleAweniaStatus();
+    }
 
     if (message.startsWith("TASK_PLAN:")) {
-  return await handleTaskPlan(message);
-}
+      return await handleTaskPlan(message);
+    }
 
     if (message.startsWith("DEBUG_ERROR:")) {
-  return await handleDebugError(message);
-}
+      return await handleDebugError(message);
+    }
 
     if (message.startsWith("GENERATE_PATCH:")) {
-  return await handleGeneratePatch(message);
-}
+      return await handleGeneratePatch(message);
+    }
 
     if (message.startsWith("ROLLBACK_FILE:")) {
-  const filePath = message.replace("ROLLBACK_FILE:", "").trim();
+      const filePath = message.replace("ROLLBACK_FILE:", "").trim();
 
-  return await handleRollbackFile(filePath);
-}
+      return await handleRollbackFile(filePath);
+    }
 
     if (message === "RUN_BACKGROUND_WORKER") {
-  return await handleRunBackgroundWorker();
-}
+      return await handleRunBackgroundWorker();
+    }
 
     if (
       message.toLowerCase() === "ok" ||
@@ -234,43 +251,43 @@ Note: Image uploaded successfully.
     }
 
     if (message.startsWith("LIST_FILES")) {
-  return await handleListFiles();
-}
+      return await handleListFiles();
+    }
 
     if (message.startsWith("SEARCH_CODE_MEMORY:")) {
-  const query = message.replace("SEARCH_CODE_MEMORY:", "").trim();
+      const query = message.replace("SEARCH_CODE_MEMORY:", "").trim();
 
-  return await handleSearchCodeMemory(query);
-}
+      return await handleSearchCodeMemory(query);
+    }
 
     if (message.startsWith("ANALYZE_REAL_FILE:")) {
-  const filePath = message.replace("ANALYZE_REAL_FILE:", "").trim();
+      const filePath = message.replace("ANALYZE_REAL_FILE:", "").trim();
 
-  return await handleAnalyzeRealFile(
-    filePath,
-    callAIWithFallbackOptimized
-  );
-}
+      return await handleAnalyzeRealFile(
+        filePath,
+        callAIWithFallbackOptimized
+      );
+    }
 
     if (message.startsWith("READ_REAL_FILE:")) {
-  const filePath = message.replace("READ_REAL_FILE:", "").trim();
+      const filePath = message.replace("READ_REAL_FILE:", "").trim();
 
-  return await handleReadRealFile(filePath);
-}
+      return await handleReadRealFile(filePath);
+    }
 
     if (message.startsWith("READ_FILE:")) {
-  const filePath = message.replace("READ_FILE:", "").trim();
+      const filePath = message.replace("READ_FILE:", "").trim();
 
-  return await handleReadFile(filePath);
-}
+      return await handleReadFile(filePath);
+    }
 
     if (message.startsWith("WRITE_FILE:")) {
-  return await handleWriteFile(message);
-}
+      return await handleWriteFile(message);
+    }
 
     if (message.startsWith("PATCH_FILE:")) {
-  return await handlePatchFile(message);
-}
+      return await handlePatchFile(message);
+    }
 
     const currentEmotion = detectCurrentEmotion(message);
     const activeSkill = detectSkill(message);
@@ -363,16 +380,16 @@ Note: Image uploaded successfully.
         activeSkill,
         evolutionSuggestions.length
       );
-      console.log(
-        "AWARENESS:",
-        JSON.stringify(
-          cognitionRuntime.awarenessState,
-          null,
-          2
-        )
-      );
+    console.log(
+      "AWARENESS:",
+      JSON.stringify(
+        cognitionRuntime.awarenessState,
+        null,
+        2
+      )
+    );
 
-      console.timeEnd("COGNITION_RUNTIME");
+    console.timeEnd("COGNITION_RUNTIME");
 
     const evolutionAnalysis = analyzeEvolutionNeeds({
       mainFocus,

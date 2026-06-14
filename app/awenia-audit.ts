@@ -130,3 +130,12 @@ export const AweniaAudit = {
     internetLearning: "30%",
   },
 };
+
+nextPriority: [
+  "Create protected Awenia Core replies",
+  "Create CHECK_INTERNET_SYSTEM using real code verification",
+  "Create CHECK_MEMORY_SYSTEM",
+  "Create CHECK_PROJECT_STATE",
+  "Separate verified system answers from Qwen assumptions",
+  "Keep Qwen only as language generator",
+]
