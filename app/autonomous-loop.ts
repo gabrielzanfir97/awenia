@@ -43,7 +43,7 @@ export async function runAutonomousLoop() {
       memories: recentMemories.length,
       agentMessages: agentMessages.length,
       activeAgents:
-        communicationStats.activeAgents,
+        communicationStats,
     },
 
     loopAnalysis: {
