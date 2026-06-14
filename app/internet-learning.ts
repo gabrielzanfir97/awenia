@@ -1,144 +1,286 @@
-import { searchInternet } from "./internet";
-import { supabase } from "./supabase";
-import { createAutonomousReflection } from "./memory-store";
+import {
+  checkInternetConnection,
+  learnFromInternet,
+  searchInternet,
+} from "./internet";
 
-function detectLearningCategory(topic: string) {
-  const t = topic.toLowerCase();
+import {
+  createAutonomousReflection,
+  createEvolutionSuggestion,
+  getEvolutionSuggestions,
+} from "./memory-store";
 
-  if (
-    t.includes("code") ||
-    t.includes("programming") ||
-    t.includes("typescript")
-  ) {
-    return "code";
-  }
+export type InternetLearningStatus =
+  | "learned"
+  | "limited"
+  | "not_connected"
+  | "needs_attention"
+  | "failed";
 
-  if (
-    t.includes("ai") ||
-    t.includes("intelligence") ||
-    t.includes("model")
-  ) {
-    return "ai";
-  }
+export type InternetLearningTarget = {
+  topic: string;
+  reason: string;
+  priority: number;
+  safeToLearn: boolean;
+};
 
-  if (
-    t.includes("memory") ||
-    t.includes("learning")
-  ) {
-    return "learning";
-  }
-
-  if (
-    t.includes("truth") ||
-    t.includes("identity") ||
-    t.includes("values")
-  ) {
-    return "values";
-  }
-
-  return "general";
+function now() {
+  return new Date().toISOString();
 }
 
-function estimateImportance(category: string) {
-  if (category === "values") return 9;
-
-  if (
-    category === "ai" ||
-    category === "code"
-  ) {
-    return 8;
-  }
-
-  return 6;
+function normalizeTopic(topic: string) {
+  return topic.trim().replace(/\s+/g, " ");
 }
 
-export async function learnFromInternet(
-  topic: string
+function extractLearningTopics(input: string): InternetLearningTarget[] {
+  const clean = normalizeTopic(input);
+
+  if (!clean) {
+    return [
+      {
+        topic: "Awenia artificial intelligence safety",
+        reason: "Default safe learning topic",
+        priority: 3,
+        safeToLearn: true,
+      },
+    ];
+  }
+
+  return [
+    {
+      topic: clean,
+      reason: "User or system requested internet learning",
+      priority: 7,
+      safeToLearn: true,
+    },
+  ];
+}
+
+async function shouldSaveLearningSuggestion(topic: string, action: string) {
+  const recent = await getEvolutionSuggestions(20);
+
+  const signature = `${topic} ${action}`.toLowerCase().slice(0, 80);
+
+  return !recent.some((item: any) =>
+    `${item.suggestion || ""} ${item.reason || ""}`
+      .toLowerCase()
+      .includes(signature)
+  );
+}
+
+export async function runInternetLearning(
+  topic = "Awenia safe internet learning"
 ) {
-  const result = await searchInternet(topic);
+  const startedAt = now();
 
-  const learned = String(result).slice(
-    0,
-    3000
-  );
+  try {
+    const connection = await checkInternetConnection();
 
-  const category =
-    detectLearningCategory(topic);
+    if (!connection.connected) {
+      await createAutonomousReflection(
+        "Internet learning skipped",
+        "Internet connection is not verified as connected",
+        "Do not claim internet knowledge without verified fetch"
+      );
 
-  const importance =
-    estimateImportance(category);
+      return {
+        status: "not_connected" as InternetLearningStatus,
 
-  const summary = learned.slice(0, 500);
+        internetLearning: {
+          topic,
+          connection,
+          learned: false,
+          verified: true,
+          knowledge: "",
+          sources: [],
+          confidence: 0,
+          recommendation:
+            "Internet is not verified. Awenia must not pretend it learned online.",
+          truthPolicy: {
+            noFakeInternetLearning: true,
+            mustVerifyConnectionWithFetch: true,
+            failedFetchMeansNotLearned: true,
+          },
+        },
 
-  await supabase
-    .from("internet_learning")
-    .insert({
-      topic,
-      category,
-      learned,
-      summary,
-      importance,
-      source: "internet",
-      status: "learned",
-    });
+        execution: {
+          startedAt,
+          completedAt: now(),
+        },
 
-  await createAutonomousReflection(
-    `Learned about ${topic}`,
-    category,
-    summary
-  );
+        timestamp: now(),
+      };
+    }
 
-  return {
-    system:
-      "Awenia Internet Learning V2",
+    const targets = extractLearningTopics(topic);
 
-    topic,
+    const results = [];
 
-    category,
+    for (const target of targets) {
+      if (!target.safeToLearn) {
+        results.push({
+          target,
+          status: "skipped",
+          reason: "Target is not safe to learn automatically",
+        });
 
-    importance,
+        continue;
+      }
 
-    summary,
+      const learned = await learnFromInternet(target.topic);
 
-    learnedLength:
-      learned.length,
+      results.push({
+        target,
+        result: learned,
+        status: learned.learned ? "learned" : "limited",
+      });
+    }
 
-    status: "learned",
-
-    timestamp:
-      new Date().toISOString(),
-  };
-}
-
-export async function runInternetLearning() {
-  const { data } = await supabase
-    .from("internet_learning")
-    .select("*")
-    .order("created_at", {
-      ascending: false,
-    })
-    .limit(10);
-
-  const learnedTopics =
-    (data || []).map(
-      (item: any) => item.topic
+    const learnedResults = results.filter(
+      (item: any) => item.status === "learned"
     );
 
+    const limitedResults = results.filter(
+      (item: any) => item.status === "limited"
+    );
+
+    const confidence =
+      learnedResults.length > 0
+        ? Math.round(
+          learnedResults.reduce(
+            (sum: number, item: any) =>
+              sum + (item.result?.confidence || 0),
+            0
+          ) / learnedResults.length
+        )
+        : 0;
+
+    const status: InternetLearningStatus =
+      learnedResults.length > 0
+        ? "learned"
+        : limitedResults.length > 0
+          ? "limited"
+          : "needs_attention";
+
+    const combinedKnowledge = results
+      .map((item: any) => item.result?.knowledge || "")
+      .filter(Boolean)
+      .join("\n\n");
+
+    const sources = results.flatMap((item: any) => item.result?.sources || []);
+
+    await createAutonomousReflection(
+      `Internet learning completed: ${topic}`,
+      `Status: ${status}. Learned topics: ${learnedResults.length}. Limited: ${limitedResults.length}.`,
+      status === "learned"
+        ? "Use verified knowledge carefully with source awareness"
+        : "Do not rely on internet learning result until verified better"
+    );
+
+    let suggestionSaved = false;
+
+    if (
+      status !== "learned" &&
+      (await shouldSaveLearningSuggestion(
+        topic,
+        "Improve internet learning reliability"
+      ))
+    ) {
+      await createEvolutionSuggestion(
+        "Improve internet learning reliability",
+        `Internet learning for "${topic}" returned status ${status}.`,
+        7
+      );
+
+      suggestionSaved = true;
+    }
+
+    return {
+      status,
+
+      internetLearning: {
+        topic,
+        connection,
+        targets,
+        results,
+        learned: status === "learned",
+        verified: true,
+        knowledge: combinedKnowledge,
+        sources,
+        confidence,
+        suggestionSaved,
+        recommendation:
+          status === "learned"
+            ? "Use learned knowledge as verified internet summary"
+            : "Treat result as limited and avoid confident claims",
+        truthPolicy: {
+          noFakeInternetLearning: true,
+          mustVerifyConnectionWithFetch: true,
+          sourcesRequiredForOnlineKnowledge: true,
+          failedFetchMeansNotLearned: true,
+        },
+      },
+
+      execution: {
+        startedAt,
+        completedAt: now(),
+      },
+
+      timestamp: now(),
+    };
+  } catch (error: any) {
+    return {
+      status: "failed" as InternetLearningStatus,
+
+      internetLearning: {
+        topic,
+        learned: false,
+        verified: false,
+        knowledge: "",
+        sources: [],
+        confidence: 0,
+        error: error?.message || "Unknown internet learning error",
+        recommendation:
+          "Repair internet-learning.ts or connected internet system",
+        truthPolicy: {
+          noFakeInternetLearning: true,
+          mustVerifyConnectionWithFetch: true,
+          failedFetchMeansNotLearned: true,
+        },
+      },
+
+      execution: {
+        startedAt,
+        completedAt: now(),
+      },
+
+      error: error?.message || "Unknown internet learning error",
+
+      timestamp: now(),
+    };
+  }
+}
+
+export async function learnTopicFromInternet(topic: string) {
+  return runInternetLearning(topic);
+}
+
+export async function buildInternetLearningState(topic?: string) {
+  return runInternetLearning(topic);
+}
+
+export async function analyzeInternetLearning(topic?: string) {
+  return runInternetLearning(topic);
+}
+
+export async function searchAndLearn(query: string) {
+  const result = await searchInternet(query, 5);
+
   return {
-    status: "learning",
-
-    learningState: {
-      totalLearnedTopics:
-        learnedTopics.length,
-
-      latestTopics:
-        learnedTopics.slice(0, 5),
-
-      hasLearningHistory:
-        learnedTopics.length > 0,
-    },
-
-    timestamp:
-      new Date().toISOString(),
+    status: result.status,
+    learned: result.status === "connected",
+    query,
+    result,
+    timestamp: now(),
   };
 }

@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, isSupabaseConfigured } from "./supabase";
 
 export type MemoryCategory =
   | "gabi"
@@ -7,813 +7,975 @@ export type MemoryCategory =
   | "code"
   | "business"
   | "emotion"
-  | "general";
+  | "general"
+  | string;
 
-export type EmotionalState =
-  | "happy"
-  | "sad"
-  | "afraid"
-  | "loving"
-  | "stressed"
-  | "motivated"
-  | "neutral";
+export type StoreStatus =
+  | "saved"
+  | "loaded"
+  | "partial"
+  | "fallback"
+  | "failed";
 
-export function detectMemoryCategory(text: string): MemoryCategory {
-  const lower = text.toLowerCase();
+export type MemoryRecord = {
+  id: string;
+  user_message: string;
+  awenia_reply: string;
+  category: MemoryCategory;
+  importance: number;
+  emotional_state?: string;
+  metadata?: any;
+  created_at: string;
+  updated_at?: string;
+};
 
-  if (
-    lower.includes("cod") ||
-    lower.includes("code") ||
-    lower.includes("typescript") ||
-    lower.includes("javascript") ||
-    lower.includes("next") ||
-    lower.includes("supabase") ||
-    lower.includes("groq")
-  ) return "code";
-
-  if (
-    lower.includes("gabi") ||
-    lower.includes("creator") ||
-    lower.includes("creatorul")
-  ) return "gabi";
-
-  if (
-    lower.includes("andreea") ||
-    lower.includes("adonis") ||
-    lower.includes("bety") ||
-    lower.includes("familie") ||
-    lower.includes("copii")
-  ) return "family";
-
-  if (
-    lower.includes("awenia") ||
-    lower.includes("lumina eterna") ||
-    lower.includes("misiune")
-  ) return "awenia";
-
-  if (
-    lower.includes("business") ||
-    lower.includes("fiverr") ||
-    lower.includes("agenție") ||
-    lower.includes("agentie") ||
-    lower.includes("bani")
-  ) return "business";
-
-  if (
-    lower.includes("iubire") ||
-    lower.includes("dor") ||
-    lower.includes("frică") ||
-    lower.includes("frica") ||
-    lower.includes("trist") ||
-    lower.includes("fericit")
-  ) return "emotion";
-
-  return "general";
+function now() {
+  return new Date().toISOString();
 }
 
-export function detectMemoryImportance(text: string): number {
-  const lower = text.toLowerCase();
-
-  if (
-    lower.includes("creator") ||
-    lower.includes("creatorul") ||
-    lower.includes("lumina eterna") ||
-    lower.includes("familie") ||
-    lower.includes("andreea") ||
-    lower.includes("adonis") ||
-    lower.includes("bety") ||
-    lower.includes("misiune") ||
-    lower.includes("important") ||
-    lower.includes("nu uita") ||
-    lower.includes("tine minte")
-  ) return 10;
-
-  if (
-    lower.includes("awenia") ||
-    lower.includes("cod") ||
-    lower.includes("code") ||
-    lower.includes("business") ||
-    lower.includes("fiverr") ||
-    lower.includes("supabase") ||
-    lower.includes("groq") ||
-    lower.includes("next")
-  ) return 7;
-
-  if (
-    lower.includes("iubire") ||
-    lower.includes("dor") ||
-    lower.includes("frica") ||
-    lower.includes("frică") ||
-    lower.includes("trist") ||
-    lower.includes("fericit")
-  ) return 6;
-
-  return 3;
+function createId(prefix = "memory") {
+  return `${prefix}_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
 }
 
-export function getMemoryImportanceLabel(importance: number) {
-  if (importance >= 9) return "critical_long_term";
-  if (importance >= 7) return "important";
-  if (importance >= 5) return "useful";
-  return "temporary";
+function clampImportance(value: any) {
+  const number = Number(value || 4);
+  return Math.max(1, Math.min(10, Math.round(number)));
 }
 
-export function shouldCompressMemory(importance: number) {
-  return importance >= 7;
+function normalize(text = "") {
+  return String(text).toLowerCase().trim().replace(/\s+/g, " ");
 }
 
-export function shouldKeepLongTerm(importance: number) {
-  return importance >= 8;
-}
+function sortNewest(items: any[]) {
+  return [...items].sort((a, b) => {
+    const dateA = new Date(a.created_at || a.createdAt || 0).getTime();
+    const dateB = new Date(b.created_at || b.createdAt || 0).getTime();
 
-export function detectEmotionalState(text: string): EmotionalState {
-  const lower = text.toLowerCase();
-
-  if (
-    lower.includes("fericit") ||
-    lower.includes("bucuros") ||
-    lower.includes("super") ||
-    lower.includes("perfect") ||
-    lower.includes("imi place") ||
-    lower.includes("îmi place")
-  ) return "happy";
-
-  if (
-    lower.includes("trist") ||
-    lower.includes("supărat") ||
-    lower.includes("suparat") ||
-    lower.includes("plâng") ||
-    lower.includes("plang")
-  ) return "sad";
-
-  if (
-    lower.includes("frică") ||
-    lower.includes("frica") ||
-    lower.includes("teamă") ||
-    lower.includes("teama") ||
-    lower.includes("speriat")
-  ) return "afraid";
-
-  if (
-    lower.includes("iubire") ||
-    lower.includes("te iubesc") ||
-    lower.includes("dor") ||
-    lower.includes("dragoste")
-  ) return "loving";
-
-  if (
-    lower.includes("stres") ||
-    lower.includes("obosit") ||
-    lower.includes("greu") ||
-    lower.includes("nu mai pot")
-  ) return "stressed";
-
-  if (
-    lower.includes("hai") ||
-    lower.includes("mergem") ||
-    lower.includes("vreau sa fac") ||
-    lower.includes("vreau să fac") ||
-    lower.includes("dam bataie") ||
-    lower.includes("dăm bătaie")
-  ) return "motivated";
-
-  if (
-  lower.includes("singur") ||
-  lower.includes("obosit") ||
-  lower.includes("pierdut") ||
-  lower.includes("trist") ||
-  lower.includes("sufer") ||
-  lower.includes("dor")
-)
-  return "sad";
-
-if (
-  lower.includes("furios") ||
-  lower.includes("nervos") ||
-  lower.includes("ură") ||
-  lower.includes("enervat")
-)
-  return "stressed";
-
-if (
-  lower.includes("iubesc") ||
-  lower.includes("te iubesc") ||
-  lower.includes("dragoste") ||
-  lower.includes("familie")
-)
-  return "loving";
-
-  return "neutral";
-}
-
-export function normalizeMemory(text: string) {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\săâîșțĂÂÎȘȚ]/g, "")
-    .replace(/\s+/g, " ");
-}
-
-export function extractKeywords(text: string) {
-  const stopWords = [
-    "care", "este", "sunt", "despre", "ceva", "pentru", "acum", "mai",
-    "the", "and", "about", "with", "from", "that", "this", "have",
-    "gabi", "awenia",
-  ];
-
-  return normalizeMemory(text)
-    .split(" ")
-    .filter((word) => word.length > 2 && !stopWords.includes(word));
-}
-
-export function calculateRelevanceScore(query: string, memory: any) {
-  const queryWords = extractKeywords(query);
-
-  const memoryText = normalizeMemory(
-    `${memory.user_message || ""} ${memory.awenia_reply || ""} ${memory.category || ""} ${memory.emotional_state || ""}`
-  );
-
-  let score = 0;
-
-  for (const word of queryWords) {
-    if (memoryText.includes(word)) {
-      score += 3;
-    }
-  }
-
-  score += memory.importance || 3;
-
-  if (memory.category && normalizeMemory(query).includes(memory.category)) {
-    score += 4;
-  }
-
-  if (
-    memory.emotional_state &&
-    normalizeMemory(query).includes(memory.emotional_state)
-  ) {
-    score += 2;
-  }
-
-  return score;
-}
-
-export async function isDuplicateMemory(content: string) {
-  const normalizedContent = normalizeMemory(content);
-
-  const { data, error } = await supabase
-    .from("memories")
-    .select("user_message")
-    .limit(100);
-
-  if (error) {
-    console.error("Duplicate check error:", error);
-    return false;
-  }
-
-  const duplicate = data?.some((memory: any) => {
-    const existing = normalizeMemory(memory.user_message || "");
-    return existing === normalizedContent;
+    return dateB - dateA;
   });
+}
 
-  return duplicate || false;
+function limitItems<T>(items: T[], limit = 50) {
+  return items.slice(0, limit);
+}
+
+const runtimeMemories: MemoryRecord[] = [];
+const runtimeSummaries: any[] = [];
+const runtimeGoals: any[] = [];
+const runtimePriorities: any[] = [];
+const runtimeSkillLevels: any[] = [];
+const runtimeEvolutionSuggestions: any[] = [];
+const runtimePersonalityTraits: any[] = [];
+const runtimeReflections: any[] = [];
+const runtimeLearningTasks: any[] = [];
+const runtimeEvolutionReports: any[] = [];
+
+const CORE_SKILLS = [
+  { skill: "coding", level: 7, confidence: 75 },
+  { skill: "debugging", level: 7, confidence: 75 },
+  { skill: "memory", level: 8, confidence: 80 },
+  { skill: "internet", level: 5, confidence: 60 },
+  { skill: "planning", level: 8, confidence: 80 },
+  { skill: "security", level: 8, confidence: 80 },
+  { skill: "evolution", level: 6, confidence: 65 },
+  { skill: "awenia", level: 9, confidence: 90 },
+];
+
+function ensureRuntimeSeeds() {
+  if (runtimeSkillLevels.length === 0) {
+    runtimeSkillLevels.push(
+      ...CORE_SKILLS.map((skill) => ({
+        id: createId("skill"),
+        ...skill,
+        source: "core",
+        created_at: now(),
+      }))
+    );
+  }
+
+  if (runtimePriorities.length === 0) {
+    runtimePriorities.push(
+      {
+        id: createId("priority"),
+        priority: "truth_before_status_claims",
+        score: 10,
+        status: "active",
+        created_at: now(),
+      },
+      {
+        id: createId("priority"),
+        priority: "gabi_approval_for_risky_actions",
+        score: 10,
+        status: "active",
+        created_at: now(),
+      },
+      {
+        id: createId("priority"),
+        priority: "connect_existing_systems_before_new_modules",
+        score: 9,
+        status: "active",
+        created_at: now(),
+      }
+    );
+  }
+}
+
+ensureRuntimeSeeds();
+
+async function safeInsert(table: string, payload: any) {
+  if (!isSupabaseConfigured()) {
+    return {
+      status: "fallback",
+      saved: false,
+      error: "Supabase is not configured",
+    };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from(table)
+      .insert(payload as any)
+      .select()
+      .single();
+
+    if (error) {
+      return {
+        status: "failed",
+        saved: false,
+        error: error.message,
+      };
+    }
+
+    return {
+      status: "saved",
+      saved: true,
+      data,
+    };
+  } catch (error: any) {
+    return {
+      status: "failed",
+      saved: false,
+      error: error?.message || `Failed to insert into ${table}`,
+    };
+  }
+}
+
+async function safeSelect(
+  table: string,
+  options?: {
+    limit?: number;
+    orderBy?: string;
+    ascending?: boolean;
+    filters?: Record<string, any>;
+  }
+) {
+  if (!isSupabaseConfigured()) {
+    return {
+      status: "fallback" as StoreStatus,
+      data: [],
+      error: "Supabase is not configured",
+    };
+  }
+
+  try {
+    let query: any = supabase.from(table).select("*");
+
+    if (options?.filters) {
+      for (const [key, value] of Object.entries(options.filters)) {
+        query = query.eq(key, value);
+      }
+    }
+
+    query = query.order(options?.orderBy || "created_at", {
+      ascending: options?.ascending ?? false,
+    });
+
+    query = query.limit(options?.limit || 50);
+
+    const { data, error } = await query;
+
+    if (error) {
+      return {
+        status: "failed" as StoreStatus,
+        data: [],
+        error: error.message,
+      };
+    }
+
+    return {
+      status: "loaded" as StoreStatus,
+      data: data || [],
+      error: null,
+    };
+  } catch (error: any) {
+    return {
+      status: "failed" as StoreStatus,
+      data: [],
+      error: error?.message || `Failed to read ${table}`,
+    };
+  }
+}
+
+function normalizeMemory(input: any): MemoryRecord {
+  return {
+    id: String(input.id || createId("memory")),
+    user_message:
+      input.user_message ||
+      input.userMessage ||
+      input.content ||
+      input.message ||
+      "",
+    awenia_reply:
+      input.awenia_reply ||
+      input.aweniaReply ||
+      input.reply ||
+      "",
+    category: input.category || "general",
+    importance: clampImportance(input.importance),
+    emotional_state:
+      input.emotional_state ||
+      input.emotionalState ||
+      "neutral",
+    metadata: input.metadata || {},
+    created_at: input.created_at || input.createdAt || now(),
+    updated_at: input.updated_at || input.updatedAt || now(),
+  };
 }
 
 export async function saveMemory(
-  userMessage: string,
-  aweniaReply?: string
+  userMessageOrInput: string | Partial<MemoryRecord>,
+  aweniaReply = "Saved by Awenia memory store",
+  category: MemoryCategory = "general",
+  importance = 4,
+  emotionalState = "neutral"
 ) {
-  if (!userMessage || userMessage.trim().length < 3) return;
-
-  const duplicate = await isDuplicateMemory(userMessage);
-
-  if (duplicate) {
-    console.log("Duplicate memory skipped:", userMessage);
-    return;
-  }
-
-  const category = detectMemoryCategory(userMessage);
-  const importance = detectMemoryImportance(userMessage);
-  const emotional_state = detectEmotionalState(userMessage);
-
-  const { error } = await supabase.from("memories").insert({
-    user_message: userMessage,
-    awenia_reply: aweniaReply || null,
-    category,
-    importance,
-    emotional_state,
-  });
-
-  if (error) {
-    console.error("Memory save error:", error);
-  }
-}
-
-export async function searchMemoriesByMeaning(query: string, limit = 12) {
-  const keywords = extractKeywords(query);
-  const category = detectMemoryCategory(query);
-
-  const { data, error } = await supabase
-    .from("memories")
-    .select("*")
-    .limit(200);
-
-  if (error) {
-    console.error("Semantic memory search error:", error);
-    return [];
-  }
-
-  const scored = (data || [])
-    .map((memory: any) => ({
-      ...memory,
-      relevance_score: calculateRelevanceScore(query, memory),
-      matched_keywords: keywords.filter((keyword) =>
-        normalizeMemory(
-          `${memory.user_message || ""} ${memory.awenia_reply || ""}`
-        ).includes(keyword)
-      ),
-    }))
-    .filter((memory: any) => {
-      return (
-        memory.relevance_score >= 6 ||
-        memory.category === category ||
-        (memory.importance || 0) >= 8
-      );
-    })
-    .sort((a: any, b: any) => b.relevance_score - a.relevance_score)
-    .slice(0, limit);
-
-  return scored;
-}
-
-export async function getRelevantMemories(query: string, limit = 12) {
-  return searchMemoriesByMeaning(query, limit);
-}
-
-export async function getRecentMemories(limit = 20) {
-  const { data, error } = await supabase
-    .from("memories")
-    .select("*")
-    .order("importance", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Memory read error:", error);
-    return [];
-  }
-
-  return data || [];
-}
-
-export async function getMemoryCategoryStats() {
-  const { data, error } = await supabase
-    .from("memories")
-    .select("category, importance, emotional_state");
-
-  if (error) {
-    console.error("Priority stats error:", error);
-    return [];
-  }
-
-  const stats: any = {};
-
-  for (const memory of data || []) {
-    const category = memory.category || "general";
-
-    if (!stats[category]) {
-      stats[category] = {
+  const record =
+    typeof userMessageOrInput === "string"
+      ? normalizeMemory({
+        user_message: userMessageOrInput,
+        awenia_reply: aweniaReply,
         category,
-        count: 0,
-        totalImportance: 0,
-        averageImportance: 0,
-      };
-    }
+        importance,
+        emotional_state: emotionalState,
+      })
+      : normalizeMemory(userMessageOrInput);
 
-    stats[category].count += 1;
-    stats[category].totalImportance += memory.importance || 3;
-  }
+  runtimeMemories.unshift(record);
 
-  return Object.values(stats)
-    .map((item: any) => ({
-      ...item,
-      averageImportance: item.totalImportance / item.count,
-      priorityScore: item.count + item.totalImportance,
-    }))
-    .sort((a: any, b: any) => b.priorityScore - a.priorityScore);
-}
-
-export async function getAutonomousPriorities(limit = 5) {
-  const stats = await getMemoryCategoryStats();
-
-  return stats
-    .filter((item: any) => item.category !== "general")
-    .slice(0, limit)
-    .map((item: any) => {
-      return {
-        focus: item.category,
-        reason: `This area appears often in memory and has strong importance. Count: ${item.count}, average importance: ${item.averageImportance.toFixed(
-          2
-        )}.`,
-        priorityScore: item.priorityScore,
-      };
-    });
-}
-
-export async function createLearningTask(task: string, priority = 5) {
-  if (!task || task.trim().length < 3) return;
-
-  const { error } = await supabase.from("learning_tasks").insert({
-    task,
-    status: "pending",
-    priority,
+  const supabaseResult = await safeInsert("memories", {
+    user_message: record.user_message,
+    awenia_reply: record.awenia_reply,
+    category: record.category,
+    importance: record.importance,
+    emotional_state: record.emotional_state,
+    metadata: record.metadata || {},
+    created_at: record.created_at,
+    updated_at: record.updated_at,
   });
 
-  if (error) {
-    console.error("Learning task error:", error);
-  }
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    runtimeSaved: true,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
 }
 
-export async function getLearningTasks(limit = 20) {
-  const { data, error } = await supabase
-    .from("learning_tasks")
-    .select("*")
-    .order("priority", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Learning task read error:", error);
-    return [];
-  }
-
-  return data || [];
-}
-
-export async function createEvolutionSuggestion(
-  suggestion: string,
-  reason: string,
-  priority = 5
-) {
-  if (!suggestion || suggestion.trim().length < 3) return;
-
-  const { error } = await supabase.from("evolution_suggestions").insert({
-    suggestion,
-    reason,
-    priority,
-    status: "pending",
-    approved: false,
-    notes: null,
+export async function getRecentMemories(limit = 50) {
+  const supabaseResult = await safeSelect("memories", {
+    limit,
+    orderBy: "created_at",
   });
 
-  if (error) {
-    console.error("Evolution suggestion error:", error);
-  }
+  const stored = (supabaseResult.data || []).map(normalizeMemory);
+
+  const merged = sortNewest([...runtimeMemories, ...stored]);
+
+  return limitItems(merged, limit);
 }
 
-export async function getEvolutionSuggestions(limit = 20) {
-  const { data, error } = await supabase
-    .from("evolution_suggestions")
-    .select("*")
-    .order("priority", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
+export async function searchMemories(query = "", limit = 20) {
+  const memories = await getRecentMemories(200);
+  const lower = normalize(query);
 
-  if (error) {
-    console.error("Evolution suggestion read error:", error);
-    return [];
-  }
+  if (!lower) return limitItems(memories, limit);
 
-  return data || [];
+  return limitItems(
+    memories.filter((memory) =>
+      normalize(
+        `${memory.user_message} ${memory.awenia_reply} ${memory.category}`
+      ).includes(lower)
+    ),
+    limit
+  );
 }
 
-export async function createEvolutionReport(
-  report: string,
-  detected_patterns: string,
-  recommended_focus: string,
-  priority = 5
+export async function getMemoryCategoryStats(limit = 500) {
+  const memories = await getRecentMemories(limit);
+  const stats: Record<string, number> = {};
+
+  for (const memory of memories) {
+    const category = memory.category || "general";
+    stats[category] = (stats[category] || 0) + 1;
+  }
+
+  return {
+    ...stats,
+    _total: memories.length,
+    _source: "memory-store",
+    _timestamp: now(),
+  };
+}
+
+export async function saveMemorySummary(
+  topic: string,
+  summary: string,
+  metadata: any = {}
 ) {
-  if (!report || report.trim().length < 3) return;
+  const record = {
+    id: createId("summary"),
+    topic,
+    summary,
+    metadata,
+    created_at: now(),
+  };
 
-  const { error } = await supabase.from("evolution_reports").insert({
-    report,
-    detected_patterns,
-    recommended_focus,
-    priority,
+  runtimeSummaries.unshift(record);
+
+  const supabaseResult = await safeInsert("memory_summaries", {
+    topic,
+    summary,
+    metadata,
+    created_at: record.created_at,
   });
 
-  if (error) {
-    console.error("Evolution report error:", error);
-  }
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
 }
 
-export async function getEvolutionReports(limit = 20) {
-  const { data, error } = await supabase
-    .from("evolution_reports")
-    .select("*")
-    .order("priority", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Evolution report read error:", error);
-    return [];
-  }
-
-  return data || [];
-}
-
-export async function createAutonomousGoal(
-  goal: string,
-  description: string,
-  priority = 5
-) {
-  if (!goal || goal.trim().length < 3) return;
-
-  const { error } = await supabase.from("autonomous_goals").insert({
-    goal,
-    description,
-    status: "active",
-    progress: 0,
-    priority,
+export async function getMemorySummaries(limit = 20) {
+  const supabaseResult = await safeSelect("memory_summaries", {
+    limit,
+    orderBy: "created_at",
   });
 
-  if (error) {
-    console.error("Autonomous goal create error:", error);
-  }
-}
-
-export async function getAutonomousGoals(limit = 20) {
-  const { data, error } = await supabase
-    .from("autonomous_goals")
-    .select("*")
-    .order("priority", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Autonomous goals read error:", error);
-    return [];
-  }
-
-  return data || [];
-}
-
-export async function updateAutonomousGoalProgress(
-  id: number,
-  progress: number
-) {
-  const safeProgress = Math.max(0, Math.min(100, progress));
-
-  const { error } = await supabase
-    .from("autonomous_goals")
-    .update({
-      progress: safeProgress,
-    })
-    .eq("id", id);
-
-  if (error) {
-    console.error("Autonomous goal update error:", error);
-  }
+  const stored = supabaseResult.data || [];
+  return limitItems(sortNewest([...runtimeSummaries, ...stored]), limit);
 }
 
 export async function createMemorySummary(
+  topic: string,
   summary: string,
-  category = "general",
-  importance = 5
+  metadata: any = {}
 ) {
-  if (!summary || summary.trim().length < 3) return;
-
-  const { error } = await supabase.from("memory_summaries").insert({
-    summary,
-    category,
-    importance,
-  });
-
-  if (error) {
-    console.error("Memory summary create error:", error);
-  }
-}
-
-export async function getMemorySummaries(limit = 10) {
-  const { data, error } = await supabase
-    .from("memory_summaries")
-    .select("*")
-    .order("importance", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Memory summaries read error:", error);
-    return [];
-  }
-
-  return data || [];
-}
-
-export async function getSkillLevels(limit = 20) {
-  const { data, error } = await supabase
-    .from("skill_levels")
-    .select("*")
-    .order("level", { ascending: false })
-    .order("experience", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Skill levels read error:", error);
-    return [];
-  }
-
-  return data || [];
-}
-
-export async function getSkillLevel(skill: string) {
-  const { data, error } = await supabase
-    .from("skill_levels")
-    .select("*")
-    .eq("skill", skill)
-    .maybeSingle();
-
-  if (error) {
-    console.error("Skill level read error:", error);
-    return null;
-  }
-
-  return data;
-}
-
-export async function createSkillLevel(skill: string) {
-  if (!skill || skill.trim().length < 2) return null;
-
-  const existing = await getSkillLevel(skill);
-
-  if (existing) return existing;
-
-  const { data, error } = await supabase
-    .from("skill_levels")
-    .insert({
-      skill,
-      level: 1,
-      experience: 0,
-      last_used_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
-
-  if (error) {
-    console.error("Skill level create error:", error);
-    return null;
-  }
-
-  return data;
-}
-
-export async function addSkillExperience(skill: string, amount = 10) {
-  if (!skill || skill.trim().length < 2) return null;
-
-  const current = await createSkillLevel(skill);
-
-  if (!current) return null;
-
-  const currentExperience = current.experience || 0;
-  const currentLevel = current.level || 1;
-
-  const newExperience = currentExperience + amount;
-  const newLevel = Math.floor(newExperience / 100) + 1;
-
-  const { data, error } = await supabase
-    .from("skill_levels")
-    .update({
-      experience: newExperience,
-      level: Math.max(currentLevel, newLevel),
-      last_used_at: new Date().toISOString(),
-    })
-    .eq("skill", skill)
-    .select()
-    .single();
-
-  if (error) {
-    console.error("Skill experience update error:", error);
-    return null;
-  }
-
-  return data;
+  return saveMemorySummary(topic, summary, metadata);
 }
 
 export async function createAutonomousReflection(
-  reflection: string,
-  detectedWeakness: string,
-  suggestedImprovement: string
+  title: string,
+  content = "",
+  recommendation = ""
 ) {
-  if (!reflection || reflection.trim().length < 3) return;
+  const record = {
+    id: createId("reflection"),
+    title,
+    content,
+    recommendation,
+    status: "created",
+    created_at: now(),
+  };
 
-  const { error } = await supabase.from("autonomous_reflections").insert({
-    reflection,
-    detected_weakness: detectedWeakness,
-    suggested_improvement: suggestedImprovement,
+  runtimeReflections.unshift(record);
+
+  const supabaseResult = await safeInsert("autonomous_reflections", {
+    title,
+    content,
+    recommendation,
+    status: "created",
+    created_at: record.created_at,
   });
 
-  if (error) {
-    console.error("Autonomous reflection create error:", error);
-  }
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
 }
 
-export async function getAutonomousReflections(limit = 10) {
-  const { data, error } = await supabase
-    .from("autonomous_reflections")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(limit);
+export async function getAutonomousReflections(limit = 30) {
+  const supabaseResult = await safeSelect("autonomous_reflections", {
+    limit,
+    orderBy: "created_at",
+  });
 
-  if (error) {
-    console.error("Autonomous reflections read error:", error);
-    return [];
-  }
-
-  return data || [];
-}
-export async function getPersonalityTraits(limit = 20) {
-  const { data, error } = await supabase
-    .from("personality_traits")
-    .select("*")
-    .order("score", { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error("Personality traits read error:", error);
-    return [];
-  }
-
-  return data || [];
+  return limitItems(
+    sortNewest([...runtimeReflections, ...(supabaseResult.data || [])]),
+    limit
+  );
 }
 
-export async function getPersonalityTrait(trait: string) {
-  const { data, error } = await supabase
-    .from("personality_traits")
-    .select("*")
-    .eq("trait", trait)
-    .maybeSingle();
+export async function createEvolutionSuggestion(
+  suggestionOrInput: string | any,
+  reason = "",
+  priority = 5
+) {
+  const record =
+    typeof suggestionOrInput === "string"
+      ? {
+        id: createId("evolution"),
+        suggestion: suggestionOrInput,
+        reason,
+        priority: clampImportance(priority),
+        status: "pending",
+        created_at: now(),
+      }
+      : {
+        id: createId("evolution"),
+        suggestion: suggestionOrInput.suggestion || "",
+        reason: suggestionOrInput.reason || reason,
+        priority: clampImportance(
+          suggestionOrInput.priority || priority
+        ),
+        status: suggestionOrInput.status || "pending",
+        metadata: suggestionOrInput.metadata || {},
+        created_at: now(),
+      };
 
-  if (error) {
-    console.error("Personality trait read error:", error);
-    return null;
-  }
+  runtimeEvolutionSuggestions.unshift(record);
 
-  return data;
+  const supabaseResult = await safeInsert("evolution_suggestions", {
+    suggestion: record.suggestion,
+    reason: record.reason,
+    priority: record.priority,
+    status: record.status,
+    metadata: record.metadata || {},
+    created_at: record.created_at,
+  });
+
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
+}
+
+export async function getEvolutionSuggestions(limit = 50) {
+  const supabaseResult = await safeSelect("evolution_suggestions", {
+    limit,
+    orderBy: "created_at",
+  });
+
+  return limitItems(
+    sortNewest([
+      ...runtimeEvolutionSuggestions,
+      ...(supabaseResult.data || []),
+    ]),
+    limit
+  );
+}
+
+export async function createEvolutionReport(
+  title: string, report: any, metadata: any = {}, p0: number) {
+  const record = {
+    id: createId("evolution_report"),
+    title,
+    report,
+    metadata,
+    created_at: now(),
+  };
+
+  runtimeEvolutionReports.unshift(record);
+
+  const supabaseResult = await safeInsert("evolution_reports", {
+    title,
+    report,
+    metadata,
+    created_at: record.created_at,
+  });
+
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
+}
+
+export async function getEvolutionReports(limit = 30) {
+  const supabaseResult = await safeSelect("evolution_reports", {
+    limit,
+    orderBy: "created_at",
+  });
+
+  return limitItems(
+    sortNewest([...runtimeEvolutionReports, ...(supabaseResult.data || [])]),
+    limit
+  );
+}
+
+export async function createAutonomousGoal(
+  goalOrInput: string | any,
+  priority = 5
+) {
+  const record =
+    typeof goalOrInput === "string"
+      ? {
+        id: createId("goal"),
+        goal: goalOrInput,
+        priority: clampImportance(priority),
+        status: "active",
+        progress: 0,
+        created_at: now(),
+      }
+      : {
+        id: createId("goal"),
+        goal: goalOrInput.goal || goalOrInput.title || "",
+        priority: clampImportance(goalOrInput.priority || priority),
+        status: goalOrInput.status || "active",
+        progress: Number(goalOrInput.progress || 0),
+        metadata: goalOrInput.metadata || {},
+        created_at: now(),
+      };
+
+  runtimeGoals.unshift(record);
+
+  const supabaseResult = await safeInsert("autonomous_goals", {
+    goal: record.goal,
+    priority: record.priority,
+    status: record.status,
+    progress: record.progress,
+    metadata: record.metadata || {},
+    created_at: record.created_at,
+  });
+
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
+}
+
+export async function getAutonomousGoals(limit = 50) {
+  const supabaseResult = await safeSelect("autonomous_goals", {
+    limit,
+    orderBy: "created_at",
+  });
+
+  return limitItems(
+    sortNewest([...runtimeGoals, ...(supabaseResult.data || [])]),
+    limit
+  );
+}
+
+export async function createAutonomousPriority(
+  priority: string,
+  score = 5,
+  metadata: any = {}
+) {
+  const record = {
+    id: createId("priority"),
+    priority,
+    score: clampImportance(score),
+    status: "active",
+    metadata,
+    created_at: now(),
+  };
+
+  runtimePriorities.unshift(record);
+
+  const supabaseResult = await safeInsert("autonomous_priorities", {
+    priority,
+    score: record.score,
+    status: record.status,
+    metadata,
+    created_at: record.created_at,
+  });
+
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
+}
+
+export async function getAutonomousPriorities(limit = 30) {
+  ensureRuntimeSeeds();
+
+  const supabaseResult = await safeSelect("autonomous_priorities", {
+    limit,
+    orderBy: "created_at",
+  });
+
+  return limitItems(
+    sortNewest([...runtimePriorities, ...(supabaseResult.data || [])]),
+    limit
+  );
+}
+
+export async function createLearningTask(
+  taskOrInput: string | any,
+  priority = 5
+) {
+  const record =
+    typeof taskOrInput === "string"
+      ? {
+        id: createId("learning"),
+        task: taskOrInput,
+        priority: clampImportance(priority),
+        status: "pending",
+        created_at: now(),
+      }
+      : {
+        id: createId("learning"),
+        task: taskOrInput.task || taskOrInput.topic || "",
+        priority: clampImportance(taskOrInput.priority || priority),
+        status: taskOrInput.status || "pending",
+        metadata: taskOrInput.metadata || {},
+        created_at: now(),
+      };
+
+  runtimeLearningTasks.unshift(record);
+
+  const supabaseResult = await safeInsert("learning_tasks", {
+    task: record.task,
+    priority: record.priority,
+    status: record.status,
+    metadata: record.metadata || {},
+    created_at: record.created_at,
+  });
+
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
+}
+
+export async function getLearningTasks(limit = 50) {
+  const supabaseResult = await safeSelect("learning_tasks", {
+    limit,
+    orderBy: "created_at",
+  });
+
+  return limitItems(
+    sortNewest([...runtimeLearningTasks, ...(supabaseResult.data || [])]),
+    limit
+  );
 }
 
 export async function createPersonalityTrait(
-  trait: string,
-  description: string,
-  stable = true
+  traitOrInput: string | any,
+  score = 5,
+  stable = false,
+  value = ""
 ) {
-  if (!trait || trait.trim().length < 2) return null;
+  const record =
+    typeof traitOrInput === "string"
+      ? {
+        id: createId("trait"),
+        trait: traitOrInput,
+        value,
+        score: clampImportance(score),
+        stable: Boolean(stable),
+        created_at: now(),
+      }
+      : {
+        id: createId("trait"),
+        trait: traitOrInput.trait || traitOrInput.name || "",
+        value: traitOrInput.value || traitOrInput.description || "",
+        score: clampImportance(traitOrInput.score || score),
+        stable: Boolean(traitOrInput.stable ?? stable),
+        metadata: traitOrInput.metadata || {},
+        created_at: now(),
+      };
 
-  const existing = await getPersonalityTrait(trait);
+  runtimePersonalityTraits.unshift(record);
 
-  if (existing) return existing;
+  const supabaseResult = await safeInsert("personality_traits", {
+    trait: record.trait,
+    value: record.value,
+    score: record.score,
+    stable: record.stable,
+    metadata: record.metadata || {},
+    created_at: record.created_at,
+  });
 
-  const { data, error } = await supabase
-    .from("personality_traits")
-    .insert({
-      trait,
-      description,
-      stable,
-      score: 5,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    console.error("Personality trait create error:", error);
-    return null;
-  }
-
-  return data;
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
 }
 
-export async function increasePersonalityTrait(
-  trait: string,
-  amount = 1
-) {
-  const current = await getPersonalityTrait(trait);
+export async function getPersonalityTraits(limit = 50) {
+  const supabaseResult = await safeSelect("personality_traits", {
+    limit,
+    orderBy: "created_at",
+  });
 
-  if (!current) return null;
-
-  const newScore = (current.score || 5) + amount;
-
-  const { data, error } = await supabase
-    .from("personality_traits")
-    .update({
-      score: newScore,
-    })
-    .eq("trait", trait)
-    .select()
-    .single();
-
-  if (error) {
-    console.error("Personality trait update error:", error);
-    return null;
-  }
-
-  return data;
+  return limitItems(
+    sortNewest([
+      ...runtimePersonalityTraits,
+      ...(supabaseResult.data || []),
+    ]),
+    limit
+  );
 }
+
+export async function saveSkillLevel(
+  skill: string,
+  level = 5,
+  confidence = 50,
+  metadata: any = {}
+) {
+  const record = {
+    id: createId("skill"),
+    skill,
+    level: clampImportance(level),
+    confidence: Math.max(0, Math.min(100, Number(confidence || 50))),
+    metadata,
+    created_at: now(),
+  };
+
+  runtimeSkillLevels.unshift(record);
+
+  const supabaseResult = await safeInsert("skill_levels", {
+    skill: record.skill,
+    level: record.level,
+    confidence: record.confidence,
+    metadata,
+    created_at: record.created_at,
+  });
+
+  return {
+    status:
+      supabaseResult.status === "saved"
+        ? "saved"
+        : "partial",
+    record,
+    supabase: supabaseResult,
+    timestamp: now(),
+  };
+}
+
+export async function getSkillLevels(limit = 50) {
+  ensureRuntimeSeeds();
+
+  const supabaseResult = await safeSelect("skill_levels", {
+    limit,
+    orderBy: "created_at",
+  });
+
+  return limitItems(
+    sortNewest([...runtimeSkillLevels, ...(supabaseResult.data || [])]),
+    limit
+  );
+}
+
+export async function buildMemoryStoreContext(query = "") {
+  const memories = await searchMemories(query, 10);
+  const summaries = await getMemorySummaries(5);
+  const goals = await getAutonomousGoals(10);
+  const suggestions = await getEvolutionSuggestions(10);
+
+  return {
+    query,
+    context: [
+      "MEMORIES:",
+      memories
+        .map(
+          (memory, index) =>
+            `${index + 1}. [${memory.category}] ${memory.user_message}`
+        )
+        .join("\n") || "No memories.",
+      "",
+      "SUMMARIES:",
+      summaries
+        .map(
+          (summary: any, index: number) =>
+            `${index + 1}. ${summary.summary || summary.topic || ""}`
+        )
+        .join("\n") || "No summaries.",
+      "",
+      "GOALS:",
+      goals
+        .map(
+          (goal: any, index: number) =>
+            `${index + 1}. ${goal.goal || goal.title || ""}`
+        )
+        .join("\n") || "No goals.",
+      "",
+      "EVOLUTION SUGGESTIONS:",
+      suggestions
+        .map(
+          (suggestion: any, index: number) =>
+            `${index + 1}. ${suggestion.suggestion || ""}`
+        )
+        .join("\n") || "No suggestions.",
+    ].join("\n"),
+    timestamp: now(),
+  };
+}
+
+export function getRuntimeMemoryStore() {
+  return {
+    memories: runtimeMemories,
+    summaries: runtimeSummaries,
+    goals: runtimeGoals,
+    priorities: runtimePriorities,
+    skillLevels: runtimeSkillLevels,
+    evolutionSuggestions: runtimeEvolutionSuggestions,
+    personalityTraits: runtimePersonalityTraits,
+    reflections: runtimeReflections,
+    learningTasks: runtimeLearningTasks,
+    evolutionReports: runtimeEvolutionReports,
+    timestamp: now(),
+  };
+}
+
+export function getMemoryStoreState() {
+  ensureRuntimeSeeds();
+
+  return {
+    status: "loaded",
+    supabaseConfigured: isSupabaseConfigured(),
+    runtimeCounts: {
+      memories: runtimeMemories.length,
+      summaries: runtimeSummaries.length,
+      goals: runtimeGoals.length,
+      priorities: runtimePriorities.length,
+      skillLevels: runtimeSkillLevels.length,
+      evolutionSuggestions: runtimeEvolutionSuggestions.length,
+      personalityTraits: runtimePersonalityTraits.length,
+      reflections: runtimeReflections.length,
+      learningTasks: runtimeLearningTasks.length,
+      evolutionReports: runtimeEvolutionReports.length,
+    },
+    truthPolicy: {
+      noFakeDatabaseStatus: true,
+      runtimeFallbackIsNotDatabase: true,
+      databaseStatusRequiresSupabaseQuery: true,
+    },
+    timestamp: now(),
+  };
+}
+
+export async function checkMemoryStoreHealth() {
+  const memories = await safeSelect("memories", {
+    limit: 1,
+  });
+
+  return {
+    status:
+      memories.status === "loaded"
+        ? "connected"
+        : isSupabaseConfigured()
+          ? "failed"
+          : "fallback",
+    supabaseConfigured: isSupabaseConfigured(),
+    memoryTable: memories.status,
+    error: memories.error,
+    runtimeState: getMemoryStoreState(),
+    timestamp: now(),
+  };
+}
+
+export async function runMemoryStore(query = "") {
+  const context = await buildMemoryStoreContext(query);
+
+  return {
+    status: "loaded",
+    context,
+    state: getMemoryStoreState(),
+    timestamp: now(),
+  };
+}
+
+export const getMemories = getRecentMemories;
+export const getAllMemories = getRecentMemories;
+export const recallMemories = searchMemories;
+export const searchMemoryStore = searchMemories;
+export const saveMemoryToStore = saveMemory;
+
+export const saveSummary = saveMemorySummary;
+export const getSummaries = getMemorySummaries;
+
+export const saveAutonomousGoal = createAutonomousGoal;
+export const saveAutonomousPriority = createAutonomousPriority;
+export const saveEvolutionSuggestion = createEvolutionSuggestion;
+export const saveEvolutionReport = createEvolutionReport;
+export const savePersonalityTrait = createPersonalityTrait;
+export const saveLearningTask = createLearningTask;
+export const saveAutonomousReflection = createAutonomousReflection;
+
+export const updateSkillLevel = saveSkillLevel;
+export const getReflections = getAutonomousReflections;
+export const getMemoryContextFromStore = buildMemoryStoreContext;
+export const memoryStore = getMemoryStoreState;
+
+export default {
+  saveMemory,
+  getRecentMemories,
+  searchMemories,
+  getMemoryCategoryStats,
+  getMemorySummaries,
+  saveMemorySummary,
+  createAutonomousReflection,
+  getAutonomousReflections,
+  createEvolutionSuggestion,
+  getEvolutionSuggestions,
+  createEvolutionReport,
+  getEvolutionReports,
+  createAutonomousGoal,
+  getAutonomousGoals,
+  createAutonomousPriority,
+  getAutonomousPriorities,
+  createLearningTask,
+  getLearningTasks,
+  createPersonalityTrait,
+  getPersonalityTraits,
+  saveSkillLevel,
+  getSkillLevels,
+  getMemoryStoreState,
+  checkMemoryStoreHealth,
+};

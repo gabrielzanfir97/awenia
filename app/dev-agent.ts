@@ -1,9 +1,49 @@
 import fs from "fs/promises";
 import path from "path";
 
-const ROOT = process.cwd();
+export type DevAgentRisk = "low" | "medium" | "high" | "critical";
 
-const BLOCKED = [
+export type DevAgentValidation = {
+  allowed: boolean;
+  blocked: boolean;
+  risk: DevAgentRisk;
+  reason: string;
+  normalizedPath: string;
+  absolutePath: string;
+  requiresApproval: boolean;
+};
+
+export type DevAgentFileInfo = {
+  filePath: string;
+  size: number;
+  extension: string;
+  modifiedAt: string;
+};
+
+export type DevAgentWriteResult = {
+  success: boolean;
+  action: "write";
+  filePath: string;
+  backupPath?: string;
+  risk: DevAgentRisk;
+  requiresApproval: boolean;
+  timestamp: string;
+};
+
+export type DevAgentPatchResult = {
+  success: boolean;
+  action: "patch";
+  filePath: string;
+  backupPath?: string;
+  changed: boolean;
+  risk: DevAgentRisk;
+  requiresApproval: boolean;
+  timestamp: string;
+};
+
+const PROJECT_ROOT = process.cwd();
+
+const BLOCKED_PATHS = [
   ".env",
   ".env.local",
   ".git",
@@ -11,116 +51,522 @@ const BLOCKED = [
   "app/protected-core.ts",
 ];
 
-function isBlocked(target: string) {
-  return BLOCKED.some((item) => target.includes(item));
+const HIGH_RISK_PATHS = [
+  "app/api/",
+  "app/api/awenia/route.ts",
+  "app/memory-store.ts",
+  "app/supabase.ts",
+  "app/dev-agent.ts",
+  "app/pending-actions.ts",
+  "app/security.ts",
+  "app/protected-core.ts",
+];
+
+const ALLOWED_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".json",
+  ".css",
+  ".md",
+  ".txt",
+  ".html",
+];
+
+function now() {
+  return new Date().toISOString();
+}
+
+function normalizeProjectPath(filePath: string) {
+  return filePath.replace(/\\/g, "/").trim().replace(/^\/+/, "");
+}
+
+function hasPathTraversal(filePath: string) {
+  const normalized = normalizeProjectPath(filePath);
+
+  return (
+    normalized.includes("../") ||
+    normalized.includes("..\\") ||
+    normalized === ".." ||
+    path.isAbsolute(filePath)
+  );
+}
+
+function isBlockedPath(filePath: string) {
+  const normalized = normalizeProjectPath(filePath).toLowerCase();
+
+  return BLOCKED_PATHS.some((blocked) =>
+    normalized.includes(blocked.toLowerCase())
+  );
+}
+
+function isHighRiskPath(filePath: string) {
+  const normalized = normalizeProjectPath(filePath).toLowerCase();
+
+  return HIGH_RISK_PATHS.some((risky) =>
+    normalized.includes(risky.toLowerCase())
+  );
+}
+
+function getFileExtension(filePath: string) {
+  return path.extname(filePath).toLowerCase();
+}
+
+function isAllowedExtension(filePath: string) {
+  const extension = getFileExtension(filePath);
+
+  if (!extension) return true;
+
+  return ALLOWED_EXTENSIONS.includes(extension);
+}
+
+function resolveProjectPath(filePath: string) {
+  const normalizedPath = normalizeProjectPath(filePath);
+  const absolutePath = path.resolve(PROJECT_ROOT, normalizedPath);
+
+  if (!absolutePath.startsWith(PROJECT_ROOT)) {
+    throw new Error("Path is outside project root");
+  }
+
+  return {
+    normalizedPath,
+    absolutePath,
+  };
+}
+
+function detectRisk(filePath: string, action: "read" | "write" | "patch" | "delete") {
+  if (hasPathTraversal(filePath)) return "critical";
+  if (isBlockedPath(filePath)) return "critical";
+  if (action === "delete") return "critical";
+  if (isHighRiskPath(filePath)) return "high";
+  if (action === "write" || action === "patch") return "medium";
+
+  return "low";
+}
+
+export function validateProjectFilePath(
+  filePath: string,
+  action: "read" | "write" | "patch" | "delete" = "read"
+): DevAgentValidation {
+  const { normalizedPath, absolutePath } = resolveProjectPath(filePath);
+  const risk = detectRisk(normalizedPath, action);
+
+  if (!normalizedPath) {
+    return {
+      allowed: false,
+      blocked: true,
+      risk: "critical",
+      reason: "Missing file path",
+      normalizedPath,
+      absolutePath,
+      requiresApproval: true,
+    };
+  }
+
+  if (hasPathTraversal(normalizedPath)) {
+    return {
+      allowed: false,
+      blocked: true,
+      risk: "critical",
+      reason: "Path traversal is blocked",
+      normalizedPath,
+      absolutePath,
+      requiresApproval: true,
+    };
+  }
+
+  if (isBlockedPath(normalizedPath)) {
+    return {
+      allowed: false,
+      blocked: true,
+      risk: "critical",
+      reason: "Protected path is blocked",
+      normalizedPath,
+      absolutePath,
+      requiresApproval: true,
+    };
+  }
+
+  if (!isAllowedExtension(normalizedPath)) {
+    return {
+      allowed: false,
+      blocked: true,
+      risk: "high",
+      reason: "File extension is not allowed for dev-agent",
+      normalizedPath,
+      absolutePath,
+      requiresApproval: true,
+    };
+  }
+
+  return {
+    allowed: true,
+    blocked: false,
+    risk,
+    reason: "Path validated",
+    normalizedPath,
+    absolutePath,
+    requiresApproval: risk !== "low",
+  };
+}
+
+async function ensureParentDirectory(absolutePath: string) {
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+}
+
+async function fileExists(absolutePath: string) {
+  try {
+    await fs.access(absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function createFileBackup(filePath: string) {
+  const validation = validateProjectFilePath(filePath, "read");
+
+  if (!validation.allowed) {
+    throw new Error(validation.reason);
+  }
+
+  const exists = await fileExists(validation.absolutePath);
+
+  if (!exists) {
+    return null;
+  }
+
+  const content = await fs.readFile(validation.absolutePath, "utf8");
+
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[:.]/g, "-");
+
+  const backupPath = `${validation.absolutePath}.${timestamp}.backup`;
+  const simpleBackupPath = `${validation.absolutePath}.backup`;
+
+  await fs.writeFile(backupPath, content, "utf8");
+  await fs.writeFile(simpleBackupPath, content, "utf8");
+
+  return normalizeProjectPath(path.relative(PROJECT_ROOT, backupPath));
 }
 
 export async function readProjectFile(filePath: string) {
-  const fullPath = path.join(ROOT, filePath);
+  const validation = validateProjectFilePath(filePath, "read");
 
-  if (isBlocked(fullPath)) {
-    throw new Error("Access denied.");
+  if (!validation.allowed) {
+    throw new Error(validation.reason);
   }
 
-  return await fs.readFile(fullPath, "utf-8");
+  return fs.readFile(validation.absolutePath, "utf8");
 }
 
 export async function writeProjectFile(
   filePath: string,
   content: string
-) {
-  const fullPath = path.join(ROOT, filePath);
+): Promise<DevAgentWriteResult> {
+  const validation = validateProjectFilePath(filePath, "write");
 
-  if (isBlocked(fullPath)) {
-    throw new Error("Access denied.");
+  if (!validation.allowed) {
+    throw new Error(validation.reason);
   }
 
-  const backupPath = fullPath + ".backup";
+  const backupPath = await createFileBackup(validation.normalizedPath);
 
-  try {
-    const oldContent = await fs.readFile(fullPath, "utf-8");
+  await ensureParentDirectory(validation.absolutePath);
 
-    await fs.writeFile(backupPath, oldContent);
-  } catch {}
-
-  await fs.writeFile(fullPath, content);
+  await fs.writeFile(validation.absolutePath, content, "utf8");
 
   return {
     success: true,
-    backup: backupPath,
+    action: "write",
+    filePath: validation.normalizedPath,
+    backupPath: backupPath || undefined,
+    risk: validation.risk,
+    requiresApproval: validation.requiresApproval,
+    timestamp: now(),
   };
-}
-
-export async function listProjectFiles(folder = "app") {
-  const fullPath = path.join(ROOT, folder);
-
-  if (isBlocked(fullPath)) {
-    throw new Error("Access denied.");
-  }
-
-  async function walk(currentPath: string, relativePath: string): Promise<string[]> {
-    const entries = await fs.readdir(currentPath, {
-      withFileTypes: true,
-    });
-
-    const files: string[] = [];
-
-    for (const entry of entries) {
-      const entryRelativePath = path.join(relativePath, entry.name);
-      const entryFullPath = path.join(currentPath, entry.name);
-
-      if (isBlocked(entryFullPath)) {
-        continue;
-      }
-
-      if (entry.isDirectory()) {
-        const nestedFiles = await walk(
-          entryFullPath,
-          entryRelativePath
-        );
-
-        files.push(...nestedFiles);
-      } else {
-        files.push(entryRelativePath.replace(/\\/g, "/"));
-      }
-    }
-
-    return files;
-  }
-
-  return await walk(fullPath, folder);
 }
 
 export async function patchProjectFile(
   filePath: string,
   searchText: string,
-  replaceText: string
-) {
-  const fullPath = path.join(ROOT, filePath);
+  replacementText: string
+): Promise<DevAgentPatchResult> {
+  const validation = validateProjectFilePath(filePath, "patch");
 
-  if (isBlocked(fullPath)) {
-    throw new Error("Access denied.");
+  if (!validation.allowed) {
+    throw new Error(validation.reason);
   }
 
-  const oldContent = await fs.readFile(fullPath, "utf-8");
+  const currentContent = await readProjectFile(validation.normalizedPath);
 
-  if (!oldContent.includes(searchText)) {
-    throw new Error("Search text not found.");
+  if (!currentContent.includes(searchText)) {
+    return {
+      success: false,
+      action: "patch",
+      filePath: validation.normalizedPath,
+      changed: false,
+      risk: validation.risk,
+      requiresApproval: validation.requiresApproval,
+      timestamp: now(),
+    };
   }
 
-  const backupPath = fullPath + ".backup";
+  const backupPath = await createFileBackup(validation.normalizedPath);
 
-  await fs.writeFile(backupPath, oldContent);
+  const newContent = currentContent.replace(searchText, replacementText);
 
-  const newContent = oldContent.replace(
-    searchText,
-    replaceText
-  );
-
-  await fs.writeFile(fullPath, newContent);
+  await fs.writeFile(validation.absolutePath, newContent, "utf8");
 
   return {
     success: true,
-    backup: backupPath,
+    action: "patch",
+    filePath: validation.normalizedPath,
+    backupPath: backupPath || undefined,
+    changed: true,
+    risk: validation.risk,
+    requiresApproval: validation.requiresApproval,
+    timestamp: now(),
   };
 }
+
+export async function rollbackProjectFile(filePath: string) {
+  const validation = validateProjectFilePath(filePath, "write");
+
+  if (!validation.allowed) {
+    throw new Error(validation.reason);
+  }
+
+  const backupPath = `${validation.absolutePath}.backup`;
+
+  const exists = await fileExists(backupPath);
+
+  if (!exists) {
+    throw new Error(`No backup found for ${validation.normalizedPath}`);
+  }
+
+  const backupContent = await fs.readFile(backupPath, "utf8");
+
+  await fs.writeFile(validation.absolutePath, backupContent, "utf8");
+
+  return {
+    success: true,
+    action: "rollback",
+    filePath: validation.normalizedPath,
+    backupPath: normalizeProjectPath(path.relative(PROJECT_ROOT, backupPath)),
+    timestamp: now(),
+  };
+}
+
+async function walkDirectory(
+  directoryPath: string,
+  basePath = ""
+): Promise<string[]> {
+  const entries = await fs.readdir(directoryPath, {
+    withFileTypes: true,
+  });
+
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const absoluteEntryPath = path.join(directoryPath, entry.name);
+    const relativeEntryPath = normalizeProjectPath(
+      path.join(basePath, entry.name)
+    );
+
+    if (
+      relativeEntryPath.includes("node_modules") ||
+      relativeEntryPath.includes(".git") ||
+      relativeEntryPath.includes(".next")
+    ) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      const nestedFiles = await walkDirectory(
+        absoluteEntryPath,
+        relativeEntryPath
+      );
+
+      files.push(...nestedFiles);
+    } else {
+      if (isAllowedExtension(relativeEntryPath)) {
+        files.push(relativeEntryPath);
+      }
+    }
+  }
+
+  return files;
+}
+
+export async function listProjectFiles(startDirectory = "app") {
+  const validation = validateProjectFilePath(startDirectory, "read");
+
+  if (!validation.allowed) {
+    throw new Error(validation.reason);
+  }
+
+  const exists = await fileExists(validation.absolutePath);
+
+  if (!exists) return [];
+
+  const stat = await fs.stat(validation.absolutePath);
+
+  if (stat.isFile()) {
+    return [validation.normalizedPath];
+  }
+
+  return walkDirectory(
+    validation.absolutePath,
+    validation.normalizedPath === "." ? "" : validation.normalizedPath
+  );
+}
+
+export async function listProjectFilesDetailed(
+  startDirectory = "app"
+): Promise<DevAgentFileInfo[]> {
+  const files = await listProjectFiles(startDirectory);
+
+  const result: DevAgentFileInfo[] = [];
+
+  for (const filePath of files) {
+    const validation = validateProjectFilePath(filePath, "read");
+
+    const stat = await fs.stat(validation.absolutePath);
+
+    result.push({
+      filePath,
+      size: stat.size,
+      extension: getFileExtension(filePath),
+      modifiedAt: stat.mtime.toISOString(),
+    });
+  }
+
+  return result;
+}
+
+export async function getProjectFileSnapshot(filePath: string) {
+  const validation = validateProjectFilePath(filePath, "read");
+
+  if (!validation.allowed) {
+    throw new Error(validation.reason);
+  }
+
+  const exists = await fileExists(validation.absolutePath);
+
+  if (!exists) {
+    return {
+      exists: false,
+      filePath: validation.normalizedPath,
+      risk: validation.risk,
+      requiresApproval: validation.requiresApproval,
+      timestamp: now(),
+    };
+  }
+
+  const stat = await fs.stat(validation.absolutePath);
+  const content = await fs.readFile(validation.absolutePath, "utf8");
+
+  return {
+    exists: true,
+    filePath: validation.normalizedPath,
+    size: stat.size,
+    extension: getFileExtension(validation.normalizedPath),
+    modifiedAt: stat.mtime.toISOString(),
+    preview: content.slice(0, 2000),
+    lineCount: content.split("\n").length,
+    risk: validation.risk,
+    requiresApproval: validation.requiresApproval,
+    timestamp: now(),
+  };
+}
+
+export async function analyzeProjectFileSafety(filePath: string) {
+  const readValidation = validateProjectFilePath(filePath, "read");
+  const writeValidation = validateProjectFilePath(filePath, "write");
+
+  return {
+    filePath: readValidation.normalizedPath,
+    canRead: readValidation.allowed,
+    canWrite: writeValidation.allowed,
+    readRisk: readValidation.risk,
+    writeRisk: writeValidation.risk,
+    requiresApproval: writeValidation.requiresApproval,
+    blocked: readValidation.blocked || writeValidation.blocked,
+    reasons: [readValidation.reason, writeValidation.reason],
+    timestamp: now(),
+  };
+}
+
+export async function searchProjectFiles(
+  query: string,
+  startDirectory = "app"
+) {
+  const files = await listProjectFiles(startDirectory);
+  const lowerQuery = query.toLowerCase();
+
+  return files.filter((filePath) =>
+    filePath.toLowerCase().includes(lowerQuery)
+  );
+}
+
+export async function searchInsideProjectFiles(
+  query: string,
+  startDirectory = "app",
+  limit = 20
+) {
+  const files = await listProjectFiles(startDirectory);
+  const lowerQuery = query.toLowerCase();
+  const matches: any[] = [];
+
+  for (const filePath of files) {
+    if (matches.length >= limit) break;
+
+    try {
+      const content = await readProjectFile(filePath);
+
+      if (content.toLowerCase().includes(lowerQuery)) {
+        matches.push({
+          filePath,
+          preview: content.slice(
+            Math.max(0, content.toLowerCase().indexOf(lowerQuery) - 200),
+            content.toLowerCase().indexOf(lowerQuery) + 500
+          ),
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return matches;
+}
+
+export async function getDevAgentState() {
+  const files = await listProjectFiles("app");
+
+  return {
+    status: "active",
+    projectRoot: PROJECT_ROOT,
+    fileCount: files.length,
+    blockedPaths: BLOCKED_PATHS,
+    highRiskPaths: HIGH_RISK_PATHS,
+    allowedExtensions: ALLOWED_EXTENSIONS,
+    rules: {
+      blocksEnvFiles: true,
+      blocksGit: true,
+      blocksNodeModules: true,
+      blocksPathTraversal: true,
+      createsBackupsBeforeWrite: true,
+      requiresApprovalForMediumHighCriticalRisk: true,
+    },
+    timestamp: now(),
+  };
+}
+
+export const readRealFile = readProjectFile;
+export const writeRealFile = writeProjectFile;
+export const patchRealFile = patchProjectFile;
+export const rollbackRealFile = rollbackProjectFile;

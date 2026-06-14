@@ -1,339 +1,570 @@
 "use client";
 
-import { useState } from "react";
-import { AweniaCore } from "./awenia-core";
-import { awakenAwenia } from "./orchestrator";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-type ChatMessage = {
-  role: "user" | "assistant";
+import {
+  AweniaShell,
+  AweniaHeader,
+  Card,
+  Button,
+  StatusBadge,
+  CodeBlock,
+  FileDropInfo,
+  createUIMessage,
+  ChatMessage,
+} from "./ui";
+
+type UploadedFile = {
+  name: string;
+  type: string;
+  size: number;
   content: string;
-  fileName?: string;
-  fileType?: string;
-  fileData?: string;
+  encoding: "text" | "data_url";
 };
 
-function MessageContent({ content }: { content: string }) {
-  const looksLikeCode =
-    content.includes("import ") ||
-    content.includes("export default") ||
-    content.includes("function ") ||
-    content.includes("const ") ||
-    content.includes("type ") ||
-    content.includes("className=") ||
-    content.includes("return (");
+type ApiResponse = {
+  reply?: string;
+  result?: any;
+  error?: string;
+  status?: string;
+  verified?: boolean;
+  tool?: string;
+};
 
-  const copyToClipboard = async (text: string) => {
-    await navigator.clipboard.writeText(text);
-  };
+const QUICK_COMMANDS = [
+  "CHECK_AWENIA_STATUS",
+  "CHECK_PROJECT_STATE",
+  "CHECK_MEMORY_SYSTEM",
+  "CHECK_SUPABASE_SYSTEM",
+  "CHECK_INTERNET_SYSTEM",
+  "RUN_AUTONOMOUS_TESTS",
+];
 
-  if (content.includes("```")) {
-    const parts = content.split(/```/g);
+function now() {
+  return new Date().toISOString();
+}
 
-    return (
-      <div className="space-y-3">
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+
+  return `${Math.round(bytes / 1024 / 1024)} MB`;
+}
+
+function isTextFile(file: File) {
+  return (
+    file.type.startsWith("text/") ||
+    file.name.endsWith(".ts") ||
+    file.name.endsWith(".tsx") ||
+    file.name.endsWith(".js") ||
+    file.name.endsWith(".jsx") ||
+    file.name.endsWith(".json") ||
+    file.name.endsWith(".md") ||
+    file.name.endsWith(".txt") ||
+    file.name.endsWith(".css") ||
+    file.name.endsWith(".html")
+  );
+}
+
+function readFile(file: File): Promise<UploadedFile> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => {
+      reject(new Error(`Nu pot citi fișierul: ${file.name}`));
+    };
+
+    reader.onload = () => {
+      resolve({
+        name: file.name,
+        type: file.type || "unknown",
+        size: file.size,
+        content: String(reader.result || ""),
+        encoding: isTextFile(file) ? "text" : "data_url",
+      });
+    };
+
+    if (isTextFile(file)) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsDataURL(file);
+    }
+  });
+}
+
+function splitCodeBlocks(content: string) {
+  const parts: Array<{
+    type: "text" | "code";
+    content: string;
+    language?: string;
+  }> = [];
+
+  const regex = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g;
+
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({
+        type: "text",
+        content: content.slice(lastIndex, match.index),
+      });
+    }
+
+    parts.push({
+      type: "code",
+      language: match[1] || "txt",
+      content: match[2] || "",
+    });
+
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < content.length) {
+    parts.push({
+      type: "text",
+      content: content.slice(lastIndex),
+    });
+  }
+
+  return parts.length
+    ? parts
+    : [
+      {
+        type: "text" as const,
+        content,
+      },
+    ];
+}
+
+function MessageView({
+  message,
+}: {
+  message: ChatMessage;
+}) {
+  const isUser = message.role === "user";
+  const parts = splitCodeBlocks(message.content);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: isUser ? "flex-end" : "flex-start",
+        marginBottom: 14,
+      }}
+    >
+      <div
+        style={{
+          width: "fit-content",
+          maxWidth: "88%",
+          borderRadius: 18,
+          padding: 14,
+          background: isUser ? "#111827" : "#ffffff",
+          color: isUser ? "#ffffff" : "#111827",
+          border: isUser ? "none" : "1px solid #e5e7eb",
+          boxShadow: isUser ? "none" : "0 8px 26px rgba(0,0,0,0.04)",
+        }}
+      >
         {parts.map((part, index) => {
-          const isCodeBlock = index % 2 === 1;
-
-          if (isCodeBlock) {
-            const lines = part.split("\n");
-            const language = lines[0]?.trim() || "code";
-            const code = lines.slice(1).join("\n");
-
+          if (part.type === "code") {
             return (
-              <div key={index} className="overflow-hidden rounded-xl border border-gray-700 bg-[#0d1117]">
-                <div className="flex items-center justify-between border-b border-gray-800 px-4 py-2 text-xs text-gray-400">
-                  <span>{language}</span>
-                  <button onClick={() => copyToClipboard(code)} className="hover:text-white">
-                    Copy
-                  </button>
-                </div>
-
-                <pre className="max-h-[500px] overflow-auto p-4 text-sm text-green-300">
-                  <code>{code}</code>
-                </pre>
+              <div key={index} style={{ margin: "10px 0" }}>
+                <CodeBlock
+                  code={part.content}
+                  language={part.language || "txt"}
+                />
               </div>
             );
           }
 
           return (
-            <div key={index} className="whitespace-pre-wrap">
-              {part}
+            <div
+              key={index}
+              style={{
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.6,
+                fontSize: 15,
+              }}
+            >
+              {part.content}
             </div>
           );
         })}
-      </div>
-    );
-  }
 
-  if (looksLikeCode) {
-    return (
-      <div className="overflow-hidden rounded-xl border border-gray-700 bg-[#0d1117]">
-        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-2 text-xs text-gray-400">
-          <span>TypeScript</span>
-          <button onClick={() => copyToClipboard(content)} className="hover:text-white">
-            Copy
-          </button>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            marginTop: 8,
+            fontSize: 11,
+            opacity: 0.75,
+          }}
+        >
+          <span>
+            {message.timestamp
+              ? new Date(message.timestamp).toLocaleTimeString("ro-RO", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+              : ""}
+          </span>
+
+          {message.status && (
+            <StatusBadge status={message.status} label={message.status} />
+          )}
         </div>
-
-        <pre className="max-h-[500px] overflow-auto p-4 text-sm text-green-300">
-          <code>{content}</code>
-        </pre>
       </div>
-    );
-  }
-
-  return <div className="whitespace-pre-wrap">{content}</div>;
+    </div>
+  );
 }
 
-export default function Home() {
-  const [message, setMessage] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [filePreview, setFilePreview] = useState<string | null>(null);
-
+export default function Page() {
   const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content: "Bună, Gabi ❤️ Eu sunt Awenia. Nucleul meu este activ.",
-    },
+    createUIMessage(
+      "assistant",
+      "Bună, Gabi. Sunt Awenia. Continuăm pas cu pas."
+    ),
   ]);
 
+  const [input, setInput] = useState("");
+  const [files, setFiles] = useState<UploadedFile[]>([]);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("ready");
+  const [error, setError] = useState("");
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-    if (!file) return;
+  const canSend = useMemo(() => {
+    return input.trim().length > 0 && !loading;
+  }, [input, loading]);
 
-    setSelectedFile(file);
-
-    if (file.type.startsWith("image/")) {
-      const reader = new FileReader();
-
-      reader.onload = () => {
-        setFilePreview(String(reader.result));
-      };
-
-      reader.readAsDataURL(file);
-    } else {
-      setFilePreview(null);
-    }
-  };
-
-  const fileToTextOrBase64 = async (file: File) => {
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-
-      if (
-        file.type.startsWith("text/") ||
-        file.name.endsWith(".ts") ||
-        file.name.endsWith(".tsx") ||
-        file.name.endsWith(".js") ||
-        file.name.endsWith(".jsx") ||
-        file.name.endsWith(".json") ||
-        file.name.endsWith(".css") ||
-        file.name.endsWith(".html") ||
-        file.name.endsWith(".md")
-      ) {
-        reader.readAsText(file);
-      } else {
-        reader.readAsDataURL(file);
-      }
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({
+      behavior: "smooth",
     });
-  };
+  }, [messages, loading]);
 
-  const handleSend = async () => {
-    if (message.trim() === "" && !selectedFile) return;
+  async function handleFiles(selectedFiles: FileList | null) {
+    if (!selectedFiles || selectedFiles.length === 0) return;
 
-    const userMessage = message;
-    let fileData = "";
-    let fileName = "";
-    let fileType = "";
-
-    if (selectedFile) {
-      fileData = await fileToTextOrBase64(selectedFile);
-      fileName = selectedFile.name;
-      fileType = selectedFile.type || "unknown";
-    }
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: userMessage || `Am trimis fișierul: ${fileName}`,
-        fileName,
-        fileType,
-        fileData: filePreview || "",
-      },
-    ]);
-
-    setMessage("");
-    setSelectedFile(null);
-    setFilePreview(null);
-
-    const localResponse = awakenAwenia(userMessage);
-
-    if (!localResponse.shouldUseAI && !fileData) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: localResponse.reply,
-        },
-      ]);
-
-      return;
-    }
+    setError("");
 
     try {
-      setLoading(true);
+      const parsed = await Promise.all(
+        Array.from(selectedFiles).map((file) => readFile(file))
+      );
 
+      setFiles((current) => [...current, ...parsed]);
+    } catch (err: any) {
+      setError(err?.message || "Nu am putut citi fișierele.");
+    }
+  }
+
+  function removeFile(name: string) {
+    setFiles((current) => current.filter((file) => file.name !== name));
+  }
+
+  function clearChat() {
+    setMessages([
+      createUIMessage(
+        "assistant",
+        "Chat curățat, Gabi. Continuăm de aici."
+      ),
+    ]);
+    setInput("");
+    setFiles([]);
+    setError("");
+    setStatus("ready");
+  }
+
+  async function sendMessage(customMessage?: string) {
+    const messageText = (customMessage || input).trim();
+
+    if (!messageText || loading) return;
+
+    const userMessage = createUIMessage("user", messageText, {
+      files: files.map((file) => ({
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        encoding: file.encoding,
+      })),
+    });
+
+    setMessages((current) => [...current, userMessage]);
+    setInput("");
+    setLoading(true);
+    setStatus("thinking");
+    setError("");
+
+    const filesToSend = files;
+    setFiles([]);
+
+    try {
       const response = await fetch("/api/awenia", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          message: userMessage,
-          fileName,
-          fileType,
-          fileData,
+          message: messageText,
+          files: filesToSend,
+          timestamp: now(),
+          source: "awenia-ui",
         }),
       });
 
-      const data = await response.json();
+      const data: ApiResponse = await response.json();
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: data.reply || "Sunt aici, Gabi.",
-        },
+      if (!response.ok) {
+        throw new Error(data?.error || `API error ${response.status}`);
+      }
+
+      const reply =
+        data.reply ||
+        (data.result ? JSON.stringify(data.result, null, 2) : "") ||
+        "Gabi, Awenia nu a primit un răspuns clar.";
+
+      setMessages((current) => [
+        ...current,
+        createUIMessage("assistant", reply, {
+          status: data.status,
+          verified: data.verified,
+          tool: data.tool,
+        }),
       ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content:
-            "Gabi, conexiunea cu inteligența mea AI nu funcționează momentan. Nucleul meu local rămâne activ.",
-        },
+
+      setStatus(data.verified ? "verified" : "ready");
+    } catch (err: any) {
+      const message =
+        err?.message || "Awenia nu a putut răspunde acum.";
+
+      setError(message);
+      setStatus("error");
+
+      setMessages((current) => [
+        ...current,
+        createUIMessage(
+          "assistant",
+          `Gabi, a apărut o eroare:\n${message}`,
+          {
+            error: true,
+          }
+        ),
       ]);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <main className="bg-black text-white min-h-screen flex flex-col">
-      <div className="border-b border-gray-800 p-6 text-center">
-        <h1 className="text-5xl font-bold text-pink-400">
-          {AweniaCore.name}
-        </h1>
+    <AweniaShell>
+      <AweniaHeader
+        title="Awenia"
+        subtitle="AI personal local pentru Gabi"
+        status={status}
+      />
 
-        <p className="text-sm text-gray-400 mt-2">
-          Anchor: {AweniaCore.anchor}
-        </p>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-4xl mx-auto space-y-4">
-          {messages.map((msg, index) => (
-            <div
-              key={index}
-              className={
-                msg.role === "user" ? "flex justify-end" : "flex justify-start"
-              }
-            >
-              <div
-                className={
-                  msg.role === "user"
-                    ? "max-w-[80%] rounded-2xl bg-pink-500 px-5 py-4 text-white"
-                    : "max-w-[80%] rounded-2xl bg-gray-900 border border-gray-800 px-5 py-4 text-pink-300"
-                }
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr",
+          gap: 14,
+        }}
+      >
+        <Card>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              marginBottom: 12,
+            }}
+          >
+            {QUICK_COMMANDS.map((command) => (
+              <Button
+                key={command}
+                variant="secondary"
+                disabled={loading}
+                onClick={() => sendMessage(command)}
               >
-                {msg.fileData && msg.fileType?.startsWith("image/") && (
-                  <img
-                    src={msg.fileData}
-                    alt={msg.fileName || "uploaded image"}
-                    className="mb-3 max-h-64 rounded-xl border border-pink-300"
-                  />
-                )}
+                {command}
+              </Button>
+            ))}
 
-                {msg.fileName && (
-                  <div className="mb-2 text-sm opacity-80">
-                    Fișier: {msg.fileName}
-                  </div>
-                )}
+            <Button
+              variant="ghost"
+              disabled={loading}
+              onClick={clearChat}
+            >
+              Curăță chat
+            </Button>
+          </div>
 
-                <MessageContent content={msg.content} />
-              </div>
-            </div>
-          ))}
+          <div
+            style={{
+              minHeight: 420,
+              maxHeight: "62vh",
+              overflowY: "auto",
+              padding: 4,
+            }}
+          >
+            {messages.map((message, index) => (
+              <MessageView
+                key={message.id || index}
+                message={message}
+              />
+            ))}
 
-          {loading && (
-            <div className="flex justify-start">
-              <div className="rounded-2xl bg-gray-900 border border-gray-800 px-5 py-4 text-pink-300">
+            {loading && (
+              <div style={{ margin: "12px 0", color: "#6b7280" }}>
                 Awenia gândește...
               </div>
-            </div>
-          )}
-        </div>
-      </div>
+            )}
 
-      <div className="border-t border-gray-800 p-4">
-        <div className="max-w-4xl mx-auto space-y-3">
-          {selectedFile && (
-            <div className="rounded-xl bg-gray-900 border border-gray-800 p-3 text-sm text-pink-300">
-              <div>Fișier selectat: {selectedFile.name}</div>
-
-              {filePreview && (
-                <img
-                  src={filePreview}
-                  alt="preview"
-                  className="mt-3 max-h-40 rounded-xl border border-pink-300"
-                />
-              )}
-            </div>
-          )}
-
-          <div className="flex gap-2">
-            <label className="cursor-pointer rounded-xl bg-gray-800 px-4 py-3 text-white border border-gray-700 hover:bg-gray-700">
-              +
-              <input
-                type="file"
-                onChange={handleFileChange}
-                className="hidden"
-                accept="image/*,.txt,.ts,.tsx,.js,.jsx,.json,.css,.html,.md"
-              />
-            </label>
-
-            <textarea
-  value={message}
-  onChange={(event) => setMessage(event.target.value)}
-  onKeyDown={(event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      handleSend();
-    }
-  }}
-  placeholder="Scrie către Awenia..."
-  rows={1}
-  className="flex-1 resize-none rounded-xl bg-gray-800 px-4 py-3 text-white outline-none border border-gray-700 min-h-[56px] max-h-[300px] overflow-y-auto"
-/>
-
-            <button
-              onClick={handleSend}
-              disabled={loading}
-              className="rounded-xl bg-pink-500 px-5 py-3 font-bold text-white hover:bg-pink-600 disabled:opacity-50"
-            >
-              Send
-            </button>
+            <div ref={bottomRef} />
           </div>
-        </div>
+        </Card>
+
+        <Card>
+          <div style={{ marginBottom: 10 }}>
+            <FileDropInfo filesCount={files.length} />
+          </div>
+
+          {files.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                marginBottom: 12,
+              }}
+            >
+              {files.map((file) => (
+                <div
+                  key={file.name}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    padding: 10,
+                    borderRadius: 12,
+                    background: "#f9fafb",
+                    border: "1px solid #e5e7eb",
+                    fontSize: 13,
+                  }}
+                >
+                  <span>
+                    {file.name} — {formatBytes(file.size)}
+                  </span>
+
+                  <button
+                    onClick={() => removeFile(file.name)}
+                    style={{
+                      border: 0,
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontWeight: 700,
+                    }}
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={(event) => handleFiles(event.target.files)}
+            style={{ display: "none" }}
+          />
+
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "flex-end",
+            }}
+          >
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Scrie pentru Awenia..."
+              disabled={loading}
+              rows={3}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  sendMessage();
+                }
+              }}
+              style={{
+                flex: 1,
+                resize: "none",
+                borderRadius: 14,
+                border: "1px solid #e5e7eb",
+                padding: 12,
+                outline: "none",
+                fontSize: 15,
+                lineHeight: 1.5,
+              }}
+            />
+
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <Button
+                variant="secondary"
+                disabled={loading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Fișier
+              </Button>
+
+              <Button
+                disabled={!canSend}
+                onClick={() => sendMessage()}
+              >
+                Trimite
+              </Button>
+            </div>
+          </div>
+
+          {error && (
+            <div
+              style={{
+                marginTop: 10,
+                color: "#991b1b",
+                fontSize: 13,
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          <div
+            style={{
+              marginTop: 12,
+              color: "#6b7280",
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            Statusul din UI nu confirmă build-ul. Build-ul se verifică separat
+            în terminal.
+          </div>
+        </Card>
       </div>
-    </main>
+    </AweniaShell>
   );
 }

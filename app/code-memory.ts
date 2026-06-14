@@ -1,218 +1,205 @@
-import { supabase } from "./supabase";
-import { getProjectArea,getImpactAnalysis, } from "./project-map";
+import { supabase, isSupabaseConfigured } from "./supabase";
+import { saveCodeEmbedding } from "./embeddings";
+
+export type CodeRiskLevel = "low" | "medium" | "high" | "critical";
+
+export type CodeMemoryStatus =
+  | "saved"
+  | "loaded"
+  | "searched"
+  | "partial"
+  | "fallback"
+  | "failed";
 
 export type CodeMemoryData = {
   file_path: string;
-  file_purpose?: string;
-  code_summary?: string;
-  important_exports?: string;
-  important_functions?: string;
-  last_known_content?: string;
+  file_purpose: string;
+  code_summary: string;
+  important_exports: string[];
+  important_functions: string[];
+  imports: string[];
+  exports: string[];
+  risk_level: CodeRiskLevel;
+  line_count: number;
+  content_length: number;
+  last_known_content: string;
+  metadata?: any;
+  created_at: string;
+  updated_at: string;
 };
 
-export async function saveCodeMemory(data: CodeMemoryData) {
-  const { error } = await supabase.from("project_code_memory").upsert(
-    {
-      file_path: data.file_path,
-      file_purpose: data.file_purpose || "",
-      code_summary: data.code_summary || "",
-      important_exports: data.important_exports || "",
-      important_functions: data.important_functions || "",
-      last_known_content: data.last_known_content || "",
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "file_path" }
-  );
+const runtimeCodeMemory = new Map<string, CodeMemoryData>();
 
-  if (error) throw new Error(error.message);
+let activeCodeFile: {
+  filePath: string;
+  content?: string;
+  summary?: string;
+  updatedAt: string;
+} | null = null;
 
-  return true;
+function now() {
+  return new Date().toISOString();
 }
 
-export async function getCodeMemory(filePath: string) {
-  const { data, error } = await supabase
-    .from("project_code_memory")
-    .select("*")
-    .eq("file_path", filePath)
-    .single();
-
-  if (error) return null;
-
-  return data;
+function normalizePath(filePath = "") {
+  return filePath.replace(/\\/g, "/").trim().replace(/^\/+/, "");
 }
 
-export async function getAllCodeMemories() {
-  const { data, error } = await supabase
-    .from("project_code_memory")
-    .select("*")
-    .order("updated_at", { ascending: false });
-
-  if (error) return [];
-
-  return data || [];
+function normalizeCode(content = "") {
+  return content.replace(/\r\n/g, "\n");
 }
 
-export async function searchCodeMemory(query: string) {
-  const safeQuery = query.replace(/[%_,]/g, "");
+function normalizeArray(value: any): string[] {
+  if (!value) return [];
 
-  const { data, error } = await supabase
-    .from("project_code_memory")
-    .select("*")
-    .or(
-      `file_path.ilike.%${safeQuery}%,file_purpose.ilike.%${safeQuery}%,code_summary.ilike.%${safeQuery}%,important_functions.ilike.%${safeQuery}%,important_exports.ilike.%${safeQuery}%`
-    )
-    .order("updated_at", { ascending: false });
+  if (Array.isArray(value)) {
+    return value.map(String).filter(Boolean);
+  }
 
-  if (error) return [];
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
 
-  return data || [];
+      if (Array.isArray(parsed)) {
+        return parsed.map(String).filter(Boolean);
+      }
+    } catch {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+
+  return [];
 }
 
-export function normalizeCode(content: string) {
-  return content.replace(/\s+/g, " ").trim();
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
-export function createCodeSummary(content: string) {
-  const cleaned = normalizeCode(content);
+function calculateLineCount(content = "") {
+  if (!content) return 0;
 
-  if (cleaned.length <= 500) return cleaned;
-
-  return cleaned.slice(0, 250) + "\n...\n" + cleaned.slice(-250);
+  return normalizeCode(content).split("\n").length;
 }
 
-export function extractImports(content: string) {
-  const matches = [
-    ...content.matchAll(/import\s+.*?\s+from\s+["'](.+?)["']/g),
-  ];
+export function extractImports(content = "") {
+  const code = normalizeCode(content);
+  const imports: string[] = [];
 
-  return matches.map((match) => match[1]);
+  const importRegex =
+    /import\s+(?:type\s+)?(?:[\s\S]*?)\s+from\s+["']([^"']+)["'];?/g;
+
+  for (const match of code.matchAll(importRegex)) {
+    if (match[1]) imports.push(match[1]);
+  }
+
+  const sideEffectImportRegex = /import\s+["']([^"']+)["'];?/g;
+
+  for (const match of code.matchAll(sideEffectImportRegex)) {
+    if (match[1]) imports.push(match[1]);
+  }
+
+  return unique(imports);
 }
 
-export function detectDependencies(content: string) {
-  const imports = extractImports(content);
+export function extractExports(content = "") {
+  const code = normalizeCode(content);
+  const exports: string[] = [];
 
-  return imports.map((item) =>
-    item.replace("./", "app/")
-  );
+  const namedExportRegex =
+    /export\s+(?:async\s+)?(?:function|const|let|var|class|type|interface|enum)\s+([A-Za-z0-9_]+)/g;
+
+  for (const match of code.matchAll(namedExportRegex)) {
+    if (match[1]) exports.push(match[1]);
+  }
+
+  const defaultExportRegex =
+    /export\s+default\s+([A-Za-z0-9_]+)/g;
+
+  for (const match of code.matchAll(defaultExportRegex)) {
+    if (match[1]) exports.push(`default:${match[1]}`);
+  }
+
+  const groupedExportRegex = /export\s*{\s*([^}]+)\s*}/g;
+
+  for (const match of code.matchAll(groupedExportRegex)) {
+    const names = (match[1] || "")
+      .split(",")
+      .map((item) => item.trim().split(/\s+as\s+/i)[0])
+      .filter(Boolean);
+
+    exports.push(...names);
+  }
+
+  return unique(exports);
 }
 
-export function extractExports(content: string) {
-  const matches = [
-    ...content.matchAll(
-      /export\s+(?:async\s+)?(?:function|const|class|type)\s+([a-zA-Z0-9_]+)/g
-    ),
-  ];
+export function extractFunctions(content = "") {
+  const code = normalizeCode(content);
+  const functions: string[] = [];
 
-  return matches.map((match) => match[1]);
+  const functionRegex =
+    /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(/g;
+
+  for (const match of code.matchAll(functionRegex)) {
+    if (match[1]) functions.push(match[1]);
+  }
+
+  const arrowFunctionRegex =
+    /(?:export\s+)?const\s+([A-Za-z0-9_]+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>/g;
+
+  for (const match of code.matchAll(arrowFunctionRegex)) {
+    if (match[1]) functions.push(match[1]);
+  }
+
+  const simpleArrowRegex =
+    /(?:export\s+)?const\s+([A-Za-z0-9_]+)\s*=\s*(?:async\s*)?[A-Za-z0-9_]+\s*=>/g;
+
+  for (const match of code.matchAll(simpleArrowRegex)) {
+    if (match[1]) functions.push(match[1]);
+  }
+
+  return unique(functions);
 }
 
-export function extractFunctions(content: string) {
-  const functionMatches = [
-    ...content.matchAll(
-      /(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_]+)/g
-    ),
-  ];
-
-  const constFunctionMatches = [
-    ...content.matchAll(
-      /(?:export\s+)?const\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?\(/g
-    ),
-  ];
-
-  return [
-    ...functionMatches.map((match) => match[1]),
-    ...constFunctionMatches.map((match) => match[1]),
-  ];
-}
-
-export function detectFilePurpose(filePath: string, content: string) {
-  const lowerPath = filePath.toLowerCase();
-  const lowerContent = content.toLowerCase();
-
-  if (lowerPath.includes("api/awenia/route")) {
-    return "Main Awenia API route and intelligence orchestrator";
-  }
-
-  if (lowerPath.includes("page")) {
-    return "Frontend chat interface";
-  }
-
-  if (lowerPath.includes("memory-store")) {
-    return "Persistent Supabase memory system";
-  }
-
-  if (lowerPath.includes("code-memory")) {
-    return "Project code memory and code awareness system";
-  }
-
-  if (lowerPath.includes("memory")) {
-    return "Local or long-term memory system";
-  }
-
-  if (lowerPath.includes("awareness")) {
-    return "Awenia awareness state system";
-  }
-
-  if (lowerPath.includes("decision-engine")) {
-    return "Autonomous decision making system";
-  }
-
-  if (lowerPath.includes("self-improvement")) {
-    return "Self improvement cycle";
-  }
-
-  if (lowerPath.includes("autonomous-runtime")) {
-    return "Autonomous runtime system";
-  }
-
-  if (lowerPath.includes("evolution")) {
-    return "Evolution and self-improvement system";
-  }
-
-  if (lowerPath.includes("agent")) {
-    return "Agent coordination system";
-  }
-
-  if (lowerPath.includes("project-map")) {
-    return "Project architecture map";
-  }
-
-  if (lowerPath.includes("dev-agent")) {
-    return "Developer file tools";
-  }
-
-  if (lowerPath.includes("supabase")) {
-    return "Supabase client connection";
-  }
-
-  if (lowerContent.includes("supabase")) {
-    return "Supabase integration";
-  }
-
-  return "General project file";
-}
-
-export function detectRiskLevel(filePath: string, content: string) {
-  const lowerPath = filePath.toLowerCase();
+export function detectRiskLevel(
+  filePath: string,
+  content = ""
+): CodeRiskLevel {
+  const file = normalizePath(filePath).toLowerCase();
   const lowerContent = content.toLowerCase();
 
   if (
-    lowerPath.includes("route.ts") ||
-    lowerPath.includes("memory-store") ||
-    lowerPath.includes("dev-agent") ||
-    lowerPath.includes("protected-core") ||
-    lowerPath.includes("rollback") ||
-    lowerPath.includes("supabase")
+    file.includes(".env") ||
+    file.includes(".git") ||
+    file.includes("node_modules") ||
+    file.includes("protected-core.ts") ||
+    lowerContent.includes("service_role") ||
+    lowerContent.includes("private_key")
+  ) {
+    return "critical";
+  }
+
+  if (
+    file.includes("app/api/awenia/route.ts") ||
+    file.includes("memory-store.ts") ||
+    file.includes("supabase.ts") ||
+    file.includes("security.ts") ||
+    file.includes("pending-actions.ts") ||
+    file.includes("dev-agent.ts")
   ) {
     return "high";
   }
 
   if (
-    lowerContent.includes("writefile") ||
-    lowerContent.includes("patch") ||
-    lowerContent.includes("delete") ||
-    lowerContent.includes("insert") ||
-    lowerContent.includes("update")
+    file.includes("api/") ||
+    file.includes("runtime") ||
+    file.includes("agent") ||
+    file.includes("evolution") ||
+    lowerContent.includes("fetch(") ||
+    lowerContent.includes("supabase.")
   ) {
     return "medium";
   }
@@ -220,238 +207,741 @@ export function detectRiskLevel(filePath: string, content: string) {
   return "low";
 }
 
-export function createSmartCodeSummary(
-  filePath: string,
-  content: string
-) {
-  const projectArea = getProjectArea(filePath);
-  const impact = getImpactAnalysis(filePath);
+export function detectFilePurpose(filePath: string, content = "") {
+  const file = normalizePath(filePath).toLowerCase();
+  const code = content.toLowerCase();
 
-  const purpose = detectFilePurpose(filePath, content);
+  if (file.includes("app/api/awenia/route.ts")) {
+    return "Main Awenia API route / backend brain";
+  }
+
+  if (file.endsWith("page.tsx")) {
+    return "Main chat UI page";
+  }
+
+  if (file.includes("layout.tsx")) {
+    return "Next.js layout";
+  }
+
+  if (file.includes("memory-store.ts")) {
+    return "Supabase long-term memory store";
+  }
+
+  if (file.includes("memory.ts")) {
+    return "Awenia memory context and local memory seed";
+  }
+
+  if (file.includes("code-memory.ts")) {
+    return "Project code memory and code awareness system";
+  }
+
+  if (file.includes("code-tools-handler.ts")) {
+    return "Handlers for reading, writing, patching and analyzing code files";
+  }
+
+  if (file.includes("dev-agent.ts")) {
+    return "Local filesystem development agent";
+  }
+
+  if (file.includes("pending-actions.ts")) {
+    return "Approval queue for risky code actions";
+  }
+
+  if (file.includes("supabase.ts")) {
+    return "Supabase client and connection health system";
+  }
+
+  if (file.includes("internet.ts")) {
+    return "Verified internet search and fetch system";
+  }
+
+  if (file.includes("internet-learning.ts")) {
+    return "Internet learning runtime";
+  }
+
+  if (file.includes("awareness.ts")) {
+    return "Real awareness state from memory, goals, skills and evolution";
+  }
+
+  if (file.includes("consciousness.ts")) {
+    return "Combined Awenia consciousness state";
+  }
+
+  if (file.includes("decision-engine.ts")) {
+    return "Autonomous decision engine";
+  }
+
+  if (file.includes("goal-manager.ts")) {
+    return "Autonomous goal manager";
+  }
+
+  if (file.includes("self-improvement.ts")) {
+    return "Self-improvement cycle";
+  }
+
+  if (file.includes("autonomous-runtime.ts")) {
+    return "Autonomous runtime coordinator";
+  }
+
+  if (file.includes("evolution-runtime.ts")) {
+    return "Evolution runtime coordinator";
+  }
+
+  if (file.includes("agents.ts")) {
+    return "Agent definitions and runtime agent memory";
+  }
+
+  if (file.includes("agent-orchestrator.ts")) {
+    return "Multi-agent workflow orchestrator";
+  }
+
+  if (file.includes("orchestrator.ts")) {
+    return "Main message orchestrator";
+  }
+
+  if (file.includes("routing.ts")) {
+    return "Message routing system";
+  }
+
+  if (file.includes("skills.ts")) {
+    return "Skill detection and skill state system";
+  }
+
+  if (file.includes("system-prompt.ts") || file.includes("prompts.ts")) {
+    return "System prompt and message prompt builder";
+  }
+
+  if (file.includes("personality.ts")) {
+    return "Awenia personality state and behavior rules";
+  }
+
+  if (file.includes("security.ts") || file.includes("protected-core.ts")) {
+    return "Security, truth and approval protection layer";
+  }
+
+  if (file.includes("project-map.ts")) {
+    return "Project map and module awareness";
+  }
+
+  if (file.includes("project-state.ts")) {
+    return "Verified project state summary";
+  }
+
+  if (code.includes("export async function")) {
+    return "Async TypeScript module with exported runtime functions";
+  }
+
+  if (code.includes("export function")) {
+    return "TypeScript utility module with exported functions";
+  }
+
+  if (file.endsWith(".tsx")) {
+    return "React/Next.js UI component";
+  }
+
+  return "General TypeScript project file";
+}
+
+export function createCodeSummary(
+  filePathOrContent: string,
+  maybeContent?: string
+) {
+  const filePath = maybeContent ? filePathOrContent : "unknown";
+  const content = maybeContent ? maybeContent : filePathOrContent;
 
   const imports = extractImports(content);
   const exports = extractExports(content);
   const functions = extractFunctions(content);
-  const dependencies =
-    detectDependencies(content);
+  const purpose = detectFilePurpose(filePath, content);
+  const risk = detectRiskLevel(filePath, content);
 
-  const riskLevel =
-    detectRiskLevel(filePath, content);
-
-  const cleaned =
-    normalizeCode(content);
-
-  const shortContent =
-    cleaned.length > 500
-      ? cleaned.slice(0, 500) + "..."
-      : cleaned;
-
-  return `
-Project area: ${projectArea.area}
-Project risk: ${projectArea.risk}
-Area purpose: ${projectArea.purpose}
-
-Impact level: ${impact.impactLevel}
-
-Affected files:
-${
-  impact.affectedFiles.length
-    ? impact.affectedFiles.join(", ")
-    : "none detected"
+  return [
+    `Purpose: ${purpose}`,
+    `Risk: ${risk}`,
+    `Lines: ${calculateLineCount(content)}`,
+    `Imports: ${imports.length ? imports.join(", ") : "none"}`,
+    `Exports: ${exports.length ? exports.join(", ") : "none"}`,
+    `Functions: ${functions.length ? functions.join(", ") : "none"}`,
+  ].join("\n");
 }
 
-Recommendation:
-${impact.recommendation}
-
-Purpose: ${purpose}
-Risk level: ${riskLevel}
-
-Imports:
-${
-  imports.length
-    ? imports.join(", ")
-    : "none detected"
-}
-
-Exports:
-${
-  exports.length
-    ? exports.join(", ")
-    : "none detected"
-}
-
-Dependencies:
-${
-  dependencies.length
-    ? dependencies.join(", ")
-    : "none detected"
-}
-
-Functions:
-${
-  functions.length
-    ? functions.join(", ")
-    : "none detected"
-}
-
-Main logic:
-${shortContent}
-  `.trim();
-}
-
-export async function buildDependencyGraph() {
-  const memories =
-    await getAllCodeMemories();
-
-  const graph: Record<
-    string,
-    string[]
-  > = {};
-
-  for (const memory of memories) {
-    const summary =
-      memory.code_summary || "";
-
-    const match =
-      summary.match(
-        /Dependencies:\s*([\s\S]*?)\n\nFunctions:/i
-      );
-
-    const dependencies =
-      match?.[1]
-        ?.split(",")
-        .map((item: string) =>
-          item.trim()
-        )
-        .filter(Boolean) || [];
-
-    graph[memory.file_path] =
-      dependencies;
-  }
-
-  return graph;
-}
-
-export async function findAffectedFiles(
-  targetFile: string
+export function createSmartCodeSummary(
+  filePath: string,
+  content = ""
 ) {
-  const graph =
-    await buildDependencyGraph();
+  const imports = extractImports(content);
+  const exports = extractExports(content);
+  const functions = extractFunctions(content);
+  const purpose = detectFilePurpose(filePath, content);
+  const risk = detectRiskLevel(filePath, content);
 
-  const affected: string[] = [];
+  const mainLogic = normalizeCode(content)
+    .split("\n")
+    .filter((line) => {
+      const clean = line.trim();
 
-  for (const [file, dependencies] of Object.entries(graph)) {
-    const normalizedDependencies =
-      dependencies.map((dep) =>
-        dep.replace(".ts", "")
+      if (!clean) return false;
+      if (clean.startsWith("import ")) return false;
+      if (clean.startsWith("//")) return false;
+
+      return (
+        clean.startsWith("export ") ||
+        clean.startsWith("async function") ||
+        clean.startsWith("function") ||
+        clean.includes("return ") ||
+        clean.includes("await ") ||
+        clean.includes("supabase") ||
+        clean.includes("fetch(")
       );
+    })
+    .slice(0, 25)
+    .join("\n");
 
-    const normalizedTarget =
-      targetFile.replace(".ts", "");
-
-    if (
-      normalizedDependencies.some(
-        (dep) =>
-          dep.includes(normalizedTarget) ||
-          normalizedTarget.includes(dep)
-      )
-    ) {
-      affected.push(file);
-    }
-  }
-
-  return affected;
+  return [
+    `File: ${normalizePath(filePath)}`,
+    `Purpose: ${purpose}`,
+    `Risk level: ${risk}`,
+    `Line count: ${calculateLineCount(content)}`,
+    `Content length: ${content.length}`,
+    "",
+    `Imports (${imports.length}): ${imports.length ? imports.join(", ") : "none"}`,
+    `Exports (${exports.length}): ${exports.length ? exports.join(", ") : "none"}`,
+    `Functions (${functions.length}): ${functions.length ? functions.join(", ") : "none"}`,
+    "",
+    "Main logic preview:",
+    mainLogic || "No main logic detected.",
+  ].join("\n");
 }
 
-export async function createModificationPlan(
-  targetFile: string
-) {
-  const affectedFiles =
-    await findAffectedFiles(targetFile);
-
-  const plan = [
-    {
-      step: 1,
-      action: `Review ${targetFile}`,
-    },
-  ];
-
-  affectedFiles.forEach(
-    (file, index) => {
-      plan.push({
-        step: index + 2,
-        action: `Review dependent file: ${file}`,
-      });
-    }
-  );
-
-  plan.push({
-    step: plan.length + 1,
-    action: "Run build validation",
-  });
+function buildCodeMemoryRecord(
+  filePath: string,
+  content = "",
+  metadata: any = {}
+): CodeMemoryData {
+  const normalizedPath = normalizePath(filePath);
+  const cleanContent = normalizeCode(content);
 
   return {
-    targetFile,
-    affectedFiles,
-    totalAffected:
-      affectedFiles.length,
-
-    risk:
-      affectedFiles.length >= 4
-        ? "critical"
-        : affectedFiles.length >= 2
-        ? "high"
-        : affectedFiles.length >= 1
-        ? "medium"
-        : "low",
-
-    plan,
+    file_path: normalizedPath,
+    file_purpose: detectFilePurpose(normalizedPath, cleanContent),
+    code_summary: createSmartCodeSummary(normalizedPath, cleanContent),
+    important_exports: extractExports(cleanContent),
+    important_functions: extractFunctions(cleanContent),
+    imports: extractImports(cleanContent),
+    exports: extractExports(cleanContent),
+    risk_level: detectRiskLevel(normalizedPath, cleanContent),
+    line_count: calculateLineCount(cleanContent),
+    content_length: cleanContent.length,
+    last_known_content: cleanContent.slice(0, 12000),
+    metadata,
+    created_at: now(),
+    updated_at: now(),
   };
 }
 
-export async function createImpactAwareCodeSummary(
-  filePath: string,
-  content: string
+async function saveCodeMemoryToSupabase(record: CodeMemoryData) {
+  if (!isSupabaseConfigured()) {
+    return {
+      status: "fallback",
+      saved: false,
+      error: "Supabase is not configured",
+    };
+  }
+
+  try {
+    const payload = {
+      file_path: record.file_path,
+      file_purpose: record.file_purpose,
+      code_summary: record.code_summary,
+      important_exports: record.important_exports,
+      important_functions: record.important_functions,
+      imports: record.imports,
+      exports: record.exports,
+      risk_level: record.risk_level,
+      line_count: record.line_count,
+      content_length: record.content_length,
+      last_known_content: record.last_known_content,
+      metadata: record.metadata || {},
+      updated_at: record.updated_at,
+    };
+
+    const { data, error } = await supabase
+      .from("project_code_memory")
+      .upsert(payload as any, {
+        onConflict: "file_path",
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return {
+        status: "failed",
+        saved: false,
+        error: error.message,
+      };
+    }
+
+    return {
+      status: "saved",
+      saved: true,
+      data,
+    };
+  } catch (error: any) {
+    return {
+      status: "failed",
+      saved: false,
+      error: error?.message || "Failed to save code memory",
+    };
+  }
+}
+
+export async function saveCodeMemory(
+  input: string | Partial<CodeMemoryData>,
+  content = "",
+  options?: {
+    saveToSupabase?: boolean;
+    saveEmbedding?: boolean;
+    metadata?: any;
+  }
 ) {
-  const summary = createSmartCodeSummary(filePath, content);
-  const affectedFiles = await findAffectedFiles(filePath);
-  const modificationPlan = await createModificationPlan(filePath);
+  const record =
+    typeof input === "string"
+      ? buildCodeMemoryRecord(
+        input,
+        content,
+        options?.metadata || {}
+      )
+      : ({
+        ...buildCodeMemoryRecord(
+          input.file_path || "unknown",
+          input.last_known_content || content || "",
+          options?.metadata || input.metadata || {}
+        ),
+        ...input,
+        file_path: normalizePath(input.file_path || "unknown"),
+        important_exports: normalizeArray(input.important_exports),
+        important_functions: normalizeArray(input.important_functions),
+        imports: normalizeArray(input.imports),
+        exports: normalizeArray(input.exports),
+        updated_at: now(),
+      } as CodeMemoryData);
 
-  return `
-${summary}
+  runtimeCodeMemory.set(record.file_path, record);
 
-Dynamic Impact Analysis:
-Affected files:
-${
-  affectedFiles.length
-    ? affectedFiles.join(", ")
-    : "none detected"
-}
+  let supabaseResult: any = null;
+  let embeddingResult: any = null;
 
-Modification Plan:
-${
-  modificationPlan.plan
-    .map(
-      (step) =>
-        `${step.step}. ${step.action}`
-    )
-    .join("\n")
-}
-  `.trim();
-}
+  if (options?.saveToSupabase ?? true) {
+    supabaseResult = await saveCodeMemoryToSupabase(record);
+  }
 
-let activeCodeFile: {
-  file_path: string;
-  content: string;
-} | null = null;
+  if (options?.saveEmbedding ?? true) {
+    try {
+      embeddingResult = await saveCodeEmbedding(
+        record.file_path,
+        record.last_known_content,
+        {
+          purpose: record.file_purpose,
+          risk: record.risk_level,
+          exports: record.important_exports,
+          functions: record.important_functions,
+        }
+      );
+    } catch (error: any) {
+      embeddingResult = {
+        status: "failed",
+        error: error?.message || "Failed to save code embedding",
+      };
+    }
+  }
 
-export function setActiveCodeFile(file_path: string, content: string) {
-  activeCodeFile = {
-    file_path,
-    content,
+  return {
+    status:
+      supabaseResult?.status === "failed" ||
+        embeddingResult?.status === "failed"
+        ? ("partial" as CodeMemoryStatus)
+        : ("saved" as CodeMemoryStatus),
+    record,
+    runtimeSaved: true,
+    supabase: supabaseResult,
+    embedding: embeddingResult,
+    timestamp: now(),
   };
+}
+
+function normalizeSupabaseCodeMemory(item: any): CodeMemoryData {
+  return {
+    file_path: normalizePath(item.file_path || "unknown"),
+    file_purpose: item.file_purpose || "Unknown purpose",
+    code_summary: item.code_summary || "",
+    important_exports: normalizeArray(item.important_exports),
+    important_functions: normalizeArray(item.important_functions),
+    imports: normalizeArray(item.imports),
+    exports: normalizeArray(item.exports),
+    risk_level: item.risk_level || "medium",
+    line_count: Number(item.line_count || 0),
+    content_length: Number(item.content_length || 0),
+    last_known_content: item.last_known_content || "",
+    metadata: item.metadata || {},
+    created_at: item.created_at || now(),
+    updated_at: item.updated_at || now(),
+  };
+}
+
+export async function getCodeMemory(filePath: string) {
+  const normalizedPath = normalizePath(filePath);
+
+  const runtime = runtimeCodeMemory.get(normalizedPath);
+
+  if (runtime) {
+    return {
+      status: "loaded" as CodeMemoryStatus,
+      source: "runtime",
+      record: runtime,
+      timestamp: now(),
+    };
+  }
+
+  if (!isSupabaseConfigured()) {
+    return {
+      status: "fallback" as CodeMemoryStatus,
+      source: "runtime",
+      record: null,
+      error: "Supabase is not configured and runtime memory has no record",
+      timestamp: now(),
+    };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("project_code_memory")
+      .select("*")
+      .eq("file_path", normalizedPath)
+      .maybeSingle();
+
+    if (error) {
+      return {
+        status: "failed" as CodeMemoryStatus,
+        source: "supabase",
+        record: null,
+        error: error.message,
+        timestamp: now(),
+      };
+    }
+
+    if (!data) {
+      return {
+        status: "fallback" as CodeMemoryStatus,
+        source: "supabase",
+        record: null,
+        error: "No code memory found",
+        timestamp: now(),
+      };
+    }
+
+    const record = normalizeSupabaseCodeMemory(data);
+
+    runtimeCodeMemory.set(record.file_path, record);
+
+    return {
+      status: "loaded" as CodeMemoryStatus,
+      source: "supabase",
+      record,
+      timestamp: now(),
+    };
+  } catch (error: any) {
+    return {
+      status: "failed" as CodeMemoryStatus,
+      source: "supabase",
+      record: null,
+      error: error?.message || "Failed to load code memory",
+      timestamp: now(),
+    };
+  }
+}
+
+export async function getAllCodeMemories(limit = 200) {
+  const runtime = Array.from(runtimeCodeMemory.values()).slice(0, limit);
+
+  if (!isSupabaseConfigured()) {
+    return {
+      status: "fallback" as CodeMemoryStatus,
+      runtime,
+      supabase: [],
+      records: runtime,
+      count: runtime.length,
+      timestamp: now(),
+    };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("project_code_memory")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      return {
+        status: runtime.length > 0 ? "partial" : "failed",
+        runtime,
+        supabase: [],
+        records: runtime,
+        error: error.message,
+        count: runtime.length,
+        timestamp: now(),
+      };
+    }
+
+    const supabaseRecords = (data || []).map(normalizeSupabaseCodeMemory);
+
+    for (const record of supabaseRecords) {
+      runtimeCodeMemory.set(record.file_path, record);
+    }
+
+    const merged = Array.from(runtimeCodeMemory.values()).slice(0, limit);
+
+    return {
+      status: "loaded" as CodeMemoryStatus,
+      runtime,
+      supabase: supabaseRecords,
+      records: merged,
+      count: merged.length,
+      timestamp: now(),
+    };
+  } catch (error: any) {
+    return {
+      status: runtime.length > 0 ? "partial" : "failed",
+      runtime,
+      supabase: [],
+      records: runtime,
+      error: error?.message || "Failed to load all code memories",
+      count: runtime.length,
+      timestamp: now(),
+    };
+  }
+}
+
+function scoreCodeMemory(record: CodeMemoryData, query: string) {
+  const lowerQuery = query.toLowerCase();
+
+  const haystack = [
+    record.file_path,
+    record.file_purpose,
+    record.code_summary,
+    record.important_exports.join(" "),
+    record.important_functions.join(" "),
+    record.imports.join(" "),
+    record.exports.join(" "),
+    record.last_known_content.slice(0, 3000),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  let score = 0;
+
+  if (record.file_path.toLowerCase().includes(lowerQuery)) score += 50;
+  if (record.file_purpose.toLowerCase().includes(lowerQuery)) score += 30;
+  if (record.code_summary.toLowerCase().includes(lowerQuery)) score += 25;
+  if (record.important_exports.join(" ").toLowerCase().includes(lowerQuery)) {
+    score += 25;
+  }
+  if (record.important_functions.join(" ").toLowerCase().includes(lowerQuery)) {
+    score += 25;
+  }
+  if (haystack.includes(lowerQuery)) score += 10;
+
+  const words = lowerQuery.split(/\s+/).filter(Boolean);
+
+  for (const word of words) {
+    if (haystack.includes(word)) score += 3;
+  }
+
+  return score;
+}
+
+export async function searchCodeMemory(
+  query: string,
+  limit = 10
+) {
+  const safeQuery = query.trim();
+
+  if (!safeQuery) {
+    return {
+      status: "searched" as CodeMemoryStatus,
+      query,
+      results: [],
+      count: 0,
+      timestamp: now(),
+    };
+  }
+
+  const all = await getAllCodeMemories(300);
+  const records: CodeMemoryData[] = all.records || [];
+
+  const results = records
+    .map((record) => ({
+      record,
+      score: scoreCodeMemory(record, safeQuery),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  return {
+    status: "searched" as CodeMemoryStatus,
+    query: safeQuery,
+    results,
+    count: results.length,
+    sourceStatus: all.status,
+    timestamp: now(),
+  };
+}
+
+export function setActiveCodeFile(
+  filePath: string,
+  content?: string
+) {
+  const normalizedPath = normalizePath(filePath);
+
+  activeCodeFile = {
+    filePath: normalizedPath,
+    content,
+    summary: content
+      ? createSmartCodeSummary(normalizedPath, content)
+      : undefined,
+    updatedAt: now(),
+  };
+
+  return activeCodeFile;
 }
 
 export function getActiveCodeFile() {
   return activeCodeFile;
 }
+
+export async function rememberCodeFile(
+  filePath: string,
+  content: string,
+  metadata: any = {}
+) {
+  setActiveCodeFile(filePath, content);
+
+  return saveCodeMemory(filePath, content, {
+    saveToSupabase: true,
+    saveEmbedding: true,
+    metadata,
+  });
+}
+
+export async function analyzeCodeFile(
+  filePath: string,
+  content: string
+) {
+  const record = buildCodeMemoryRecord(filePath, content);
+
+  return {
+    status: "loaded" as CodeMemoryStatus,
+    record,
+    summary: record.code_summary,
+    purpose: record.file_purpose,
+    risk: record.risk_level,
+    imports: record.imports,
+    exports: record.exports,
+    functions: record.important_functions,
+    timestamp: now(),
+  };
+}
+
+export function buildCodeMemoryContext(records: CodeMemoryData[]) {
+  if (records.length === 0) {
+    return "Nu există code memory verificată pentru această căutare.";
+  }
+
+  return records
+    .map((record, index) => {
+      return [
+        `${index + 1}. ${record.file_path}`,
+        `Purpose: ${record.file_purpose}`,
+        `Risk: ${record.risk_level}`,
+        `Exports: ${record.important_exports.join(", ") || "none"}`,
+        `Functions: ${record.important_functions.join(", ") || "none"}`,
+        `Summary: ${record.code_summary.slice(0, 1200)}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+export async function getCodeMemoryContext(
+  query: string,
+  limit = 5
+) {
+  const search = await searchCodeMemory(query, limit);
+
+  return buildCodeMemoryContext(
+    search.results.map((item: any) => item.record)
+  );
+}
+
+export function getRuntimeCodeMemories() {
+  return Array.from(runtimeCodeMemory.values());
+}
+
+export function clearRuntimeCodeMemory() {
+  const count = runtimeCodeMemory.size;
+
+  runtimeCodeMemory.clear();
+
+  return {
+    status: "cleared",
+    count,
+    timestamp: now(),
+  };
+}
+
+export function getCodeMemoryState() {
+  return {
+    status: "loaded" as CodeMemoryStatus,
+    runtimeCount: runtimeCodeMemory.size,
+    activeCodeFile,
+    supabaseConfigured: isSupabaseConfigured(),
+    truthPolicy: {
+      noFakeCodeAwareness: true,
+      noClaimFileKnownWithoutRead: true,
+      runtimeMemoryIsNotDatabaseMemory: true,
+    },
+    timestamp: now(),
+  };
+}
+
+export async function runCodeMemorySystem(query = "") {
+  if (!query.trim()) {
+    return getCodeMemoryState();
+  }
+
+  const search = await searchCodeMemory(query, 10);
+
+  return {
+    status: "searched" as CodeMemoryStatus,
+    query,
+    search,
+    context: buildCodeMemoryContext(
+      search.results.map((item: any) => item.record)
+    ),
+    state: getCodeMemoryState(),
+    timestamp: now(),
+  };
+}
+
+export const getCodeMemoryByFile = getCodeMemory;
+export const listCodeMemories = getAllCodeMemories;
+export const rememberCode = rememberCodeFile;
+export const saveProjectCodeMemory = saveCodeMemory;
+export const searchProjectCodeMemory = searchCodeMemory;
+export const createSmartSummary = createSmartCodeSummary;
+export const createSummary = createCodeSummary;
+export const detectPurpose = detectFilePurpose;
+export const detectCodeRisk = detectRiskLevel;
+export const codeMemory = runtimeCodeMemory;
+
+export default saveCodeMemory;

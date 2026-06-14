@@ -1,792 +1,608 @@
-import {
-  saveMemory,
-  getRelevantMemories,
-  createLearningTask,
-  getLearningTasks,
-  createEvolutionSuggestion,
-  getEvolutionSuggestions,
-  createEvolutionReport,
-  getEvolutionReports,
-  createAutonomousGoal,
-  getAutonomousGoals,
-  getAutonomousPriorities,
-  updateAutonomousGoalProgress,
-  getMemorySummaries,
-  createMemorySummary,
-  addSkillExperience,
-  getSkillLevels,
-  createAutonomousReflection,
-  getAutonomousReflections,
-  getPersonalityTraits,
-  createPersonalityTrait,
-  increasePersonalityTrait,
-  shouldKeepLongTerm,
-  detectMemoryImportance,
-  detectEmotionalState,
-} from "@/app/memory-store";
-import { searchInternet } from "@/app/internet";
-import {
-  getEvolutionSummary,
-  createBackgroundEvolutionCycle,
-  analyzeEvolutionNeeds,
-  createBackgroundReflectionText,
-} from "@/app/evolution";
+import { NextRequest, NextResponse } from "next/server";
+
+import { callAIWithFallbackOptimized } from "@/app/ai-provider-router";
 
 import {
-  readProjectFile,
-  writeProjectFile,
-} from "@/app/dev-agent";
-
-import { ProjectMap } from "@/app/project-map";
-
-import { getActiveCodeFile } from "@/app/code-memory";
+  isSystemToolCommand,
+  handleSystemToolCommand,
+} from "@/app/system-tools-handler";
 
 import {
-  savePendingAction,
-  getLatestPendingAction,
-  completePendingAction,
-} from "@/app/pending-actions";
+  analyzeRouting,
+  getSimpleReply,
+} from "@/app/routing";
 
 import {
-  saveChatMessage,
-  getRecentChatHistory,
+  buildSystemPrompt,
+} from "@/app/system-prompt";
+
+import {
+  buildMemoryContext,
+  saveConversationMemory,
+} from "@/app/memory";
+
+import {
+  saveChatTurn,
 } from "@/app/chat-history";
 
 import {
-  savePermanentMemory,
-  getPermanentMemories,
-} from "@/app/permanent-memory";
+  runIntentRouter,
+} from "@/app/intent-router";
 
-import { detectCurrentEmotion, detectSkill } from "@/app/intent-router";
+import {
+  detectSkill,
+  buildSkillContext,
+} from "@/app/skills";
 
-import { shouldCreateLearningTask, buildLearningTask } from "@/app/learning-intent";
+import {
+  runCognitionRuntime,
+} from "@/app/cognition-runtime";
 
-import { shouldCreateEvolutionSuggestion, buildEvolutionSuggestion, shouldCreateEvolutionReport, buildEvolutionReport, shouldCreateReflection, buildReflectionReport } from "@/app/evolution-intent";
+import {
+  validateSecurityAction,
+} from "@/app/security";
 
-import { shouldCreateAutonomousGoal, shouldUpdateGoalProgress, extractProgress, buildAutonomousGoal } from "@/app/goal-intent";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-import { shouldCreateMemorySummary, buildMemorySummary, shorten, getMainFocus } from "@/app/memory-intent";
+type UploadedFile = {
+  name: string;
+  type?: string;
+  size?: number;
+  content?: string;
+  encoding?: "text" | "data_url";
+};
 
-import { shouldCreateAutonomousReflection, shouldEvolvePersonality, ensureCorePersonalityTraits } from "@/app/personality-intent";
+type AweniaRequestBody = {
+  message?: string;
+  files?: UploadedFile[];
+  timestamp?: string;
+  source?: string;
+  sessionId?: string;
+};
 
-import { getSkillInstruction } from "@/app/skill-instructions";
+function now() {
+  return new Date().toISOString();
+}
 
-import { handleListFiles, handleSearchCodeMemory, handleReadRealFile, handleReadFile, handleWriteFile, handlePatchFile, handleAnalyzeRealFile, handleGeneratePatch, handleRollbackFile } from "@/app/code-tools-handler";
+function json(data: any, status = 200) {
+  return NextResponse.json(data, {
+    status,
+  });
+}
 
-import { handleRunBackgroundWorker, handleDebugError, handleTaskPlan, handleAweniaStatus } from "@/app/system-tools-handler";
+function cleanMessage(message = "") {
+  return String(message || "").trim();
+}
 
-import { runCognitionRuntime } from "@/app/cognition-runtime";
-
-async function callAIWithFallbackOptimized(messages: any[]) {
+function safeStringify(value: any) {
   try {
-    console.log("Trying LOCAL QWEN CODER...");
-
-    const response = await fetch(
-      `${process.env.OLLAMA_BASE_URL || "http://localhost:11434"}/api/chat`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: process.env.OLLAMA_MODEL || "qwen2.5-coder:7b",
-          messages,
-          stream: false,
-          options: {
-            temperature: 0.2,
-            num_ctx: 2048,
-          },
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Ollama error: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    return {
-      choices: [
-        {
-          message: {
-            content:
-              data.message?.content ||
-              "Gabi, modelul local nu a returnat răspuns.",
-          },
-        },
-      ],
-    };
-  } catch (error) {
-    console.log("LOCAL QWEN ERROR:", error);
-
-    return {
-      choices: [
-        {
-          message: {
-            content:
-              "Gabi, AI-ul local nu răspunde acum. Verifică dacă Ollama rulează.",
-          },
-        },
-      ],
-    };
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
   }
 }
 
-export async function POST(req: Request) {
+function normalize(text = "") {
+  return text.toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+function createFallbackReply(message: string) {
+  const lower = normalize(message);
+
+  if (
+    lower === "bună" ||
+    lower === "buna" ||
+    lower === "salut" ||
+    lower === "hey"
+  ) {
+    return "Bună, Gabi. Sunt aici.";
+  }
+
+  if (lower === "ok" || lower === "ok hai" || lower === "hai") {
+    return "Da, Gabi. Continuăm.";
+  }
+
+  if (lower === "cine ești" || lower === "cine esti") {
+    return "Sunt Awenia, AI-ul personal creat de Gabi.";
+  }
+
+  return "";
+}
+
+function detectCodeToolCommand(message: string) {
+  const upper = message.trim().toUpperCase();
+
+  return (
+    upper.startsWith("LIST_FILES") ||
+    upper.startsWith("READ_FILE:") ||
+    upper.startsWith("READ_REAL_FILE:") ||
+    upper.startsWith("ANALYZE_FILE:") ||
+    upper.startsWith("ANALYZE_REAL_FILE:") ||
+    upper.startsWith("WRITE_FILE:") ||
+    upper.startsWith("PATCH_FILE:") ||
+    upper.startsWith("EXECUTE_WRITE:") ||
+    upper.startsWith("EXECUTE_PATCH:") ||
+    upper.startsWith("ROLLBACK_FILE:") ||
+    upper.startsWith("SEARCH_CODE:") ||
+    upper.startsWith("SEARCH_INSIDE:")
+  );
+}
+
+async function handleCodeToolCommand(message: string) {
+  const module: any = await import("@/app/code-tools-handler");
+
+  if (typeof module.handleCodeToolCommand === "function") {
+    return module.handleCodeToolCommand(message);
+  }
+
+  if (typeof module.handleCodeCommand === "function") {
+    return module.handleCodeCommand(message);
+  }
+
+  if (typeof module.default === "function") {
+    return module.default(message);
+  }
+
+  return json(
+    {
+      reply:
+        "Gabi, code-tools-handler există, dar nu am găsit funcția de comandă potrivită.",
+      status: "failed",
+      verified: true,
+    },
+    500
+  );
+}
+
+function buildFilesContext(files: UploadedFile[] = []) {
+  if (!files.length) return "";
+
+  return files
+    .map((file, index) => {
+      const content =
+        file.encoding === "data_url"
+          ? "[binary/data_url file uploaded]"
+          : (file.content || "").slice(0, 8000);
+
+      return [
+        `FILE ${index + 1}`,
+        `Name: ${file.name}`,
+        `Type: ${file.type || "unknown"}`,
+        `Size: ${file.size || 0}`,
+        `Encoding: ${file.encoding || "text"}`,
+        "",
+        content,
+      ].join("\n");
+    })
+    .join("\n\n---\n\n");
+}
+
+function shouldRunCognitionForMessage(message: string) {
+  const lower = normalize(message);
+
+  if (!lower) return false;
+
+  if (
+    lower === "bună" ||
+    lower === "buna" ||
+    lower === "salut" ||
+    lower === "ok" ||
+    lower === "ok hai" ||
+    lower.length <= 12
+  ) {
+    return false;
+  }
+
+  return (
+    lower.includes("cod") ||
+    lower.includes("code") ||
+    lower.includes("debug") ||
+    lower.includes("eroare") ||
+    lower.includes("memory") ||
+    lower.includes("memorie") ||
+    lower.includes("internet") ||
+    lower.includes("awenia") ||
+    lower.includes("audit") ||
+    lower.includes("proiect") ||
+    lower.includes("evolu")
+  );
+}
+
+async function saveSafely(input: {
+  userMessage: string;
+  aweniaReply: string;
+  sessionId?: string;
+  metadata?: any;
+}) {
+  const results: any = {};
+
   try {
-    console.time("TOTAL_POST");
-
-    const body = await req.json();
-    const message = body.message || "";
-    const simpleMessage = message.trim().toLowerCase();
-
-    const simpleReplies: Record<string, string> = {
-      "bună": "Bună, Gabi 💙 Sunt aici.",
-      "buna": "Bună, Gabi 💙 Sunt aici.",
-      "salut": "Salut, Gabi 💙 Sunt aici.",
-      "ok": "Perfect, Gabi.",
-      "da": "Da, Gabi.",
-      "mulțumesc": "Cu drag, Gabi 💙",
-      "multumesc": "Cu drag, Gabi 💙",
+    results.chat = await saveChatTurn({
+      sessionId: input.sessionId || "default",
+      userMessage: input.userMessage,
+      aweniaReply: input.aweniaReply,
+      metadata: input.metadata || {},
+    } as any);
+  } catch (error: any) {
+    results.chat = {
+      status: "failed",
+      error: error?.message || "Failed to save chat turn",
     };
+  }
 
-    if (simpleReplies[simpleMessage]) {
-      return Response.json({
-        reply: simpleReplies[simpleMessage],
-      });
-    }
-    const fileName = body.fileName || "";
-    const fileType = body.fileType || "";
-    const fileData = body.fileData || "";
+  try {
+    results.memory = await saveConversationMemory(
+      input.userMessage,
+      input.aweniaReply,
+      {
+        category: "general",
+        importance: 4,
+        metadata: input.metadata || {},
+      } as any
+    );
+  } catch (error: any) {
+    results.memory = {
+      status: "failed",
+      error: error?.message || "Failed to save conversation memory",
+    };
+  }
 
-    let uploadedFileContext = "";
+  return results;
+}
 
-    if (fileName && fileData) {
-      const isTextFile =
-        fileType.startsWith("text/") ||
-        fileName.endsWith(".ts") ||
-        fileName.endsWith(".tsx") ||
-        fileName.endsWith(".js") ||
-        fileName.endsWith(".jsx") ||
-        fileName.endsWith(".json") ||
-        fileName.endsWith(".css") ||
-        fileName.endsWith(".html") ||
-        fileName.endsWith(".md");
+async function buildAweniaMessages(input: {
+  message: string;
+  files: UploadedFile[];
+  skill: any;
+  routing: any;
+  memoryContext: string;
+  cognitionRuntime: any;
+}) {
+  const filesContext = buildFilesContext(input.files);
 
-      if (isTextFile) {
-        uploadedFileContext = `
-UPLOADED FILE:
-File name: ${fileName}
-File type: ${fileType}
+  const systemPrompt = buildSystemPrompt({
+    mode: "chat",
+    skill: input.skill?.skill || input.skill?.name || "general",
+    extraContext: [
+      "Reguli importante:",
+      "- Răspunde în română pentru Gabi.",
+      "- Nu inventa status de build, internet, Supabase sau fișiere.",
+      "- Dacă ceva nu a fost verificat, spune clar că nu este verificat.",
+      "- Pentru cod, lucrează pas cu pas și nu modifica fără citire/verificare.",
+      "- Gabi preferă răspunsuri scurte, clare și directe.",
+      "",
+      "Memory context:",
+      input.memoryContext || "No memory context.",
+      "",
+      "Routing:",
+      safeStringify(input.routing).slice(0, 3000),
+      "",
+      "Cognition runtime summary:",
+      safeStringify({
+        status: input.cognitionRuntime?.status,
+        mode: input.cognitionRuntime?.mode,
+        summary: input.cognitionRuntime?.summary,
+        recommendation: input.cognitionRuntime?.recommendation,
+      }).slice(0, 3000),
+    ].join("\n"),
+  } as any);
 
-FILE CONTENT:
-${String(fileData).slice(0, 12000)}
-`;
-      } else if (fileType.startsWith("image/")) {
-        uploadedFileContext = `
-UPLOADED IMAGE:
-File name: ${fileName}
-File type: ${fileType}
+  const skillContext = buildSkillContext(
+    input.skill?.skill || input.skill?.name || "general"
+  );
 
-Note: Image uploaded successfully.
-`;
-      }
-    }
+  const userContent = [
+    input.message,
+    filesContext ? "\n\nUploaded files:\n" + filesContext : "",
+  ].join("");
 
-    if (message === "AWENIA_STATUS") {
-      return await handleAweniaStatus();
-    }
+  return [
+    {
+      role: "system",
+      content: systemPrompt,
+    },
+    {
+      role: "system",
+      content: skillContext,
+    },
+    {
+      role: "user",
+      content: userContent,
+    },
+  ];
+}
 
-    if (message.startsWith("TASK_PLAN:")) {
-      return await handleTaskPlan(message);
-    }
+export async function POST(request: NextRequest) {
+  console.time("TOTAL_POST");
 
-    if (message.startsWith("DEBUG_ERROR:")) {
-      return await handleDebugError(message);
-    }
+  try {
+    const body = (await request.json()) as AweniaRequestBody;
 
-    if (message.startsWith("GENERATE_PATCH:")) {
-      return await handleGeneratePatch(message);
-    }
+    const message = cleanMessage(body.message || "");
+    const files = Array.isArray(body.files) ? body.files : [];
+    const sessionId = body.sessionId || "default";
 
-    if (message.startsWith("ROLLBACK_FILE:")) {
-      const filePath = message.replace("ROLLBACK_FILE:", "").trim();
+    if (!message && files.length === 0) {
+      console.timeEnd("TOTAL_POST");
 
-      return await handleRollbackFile(filePath);
-    }
-
-    if (message === "RUN_BACKGROUND_WORKER") {
-      return await handleRunBackgroundWorker();
-    }
-
-    if (
-      message.toLowerCase() === "ok" ||
-      message.toLowerCase() === "yes" ||
-      message.toLowerCase() === "approved" ||
-      message.toLowerCase() === "da"
-    ) {
-      const pending =
-        await getLatestPendingAction();
-
-      if (!pending) {
-        return Response.json({
-          reply: "No pending actions found.",
-        });
-      }
-
-      if (pending.action_type === "WRITE_FILE") {
-        await writeProjectFile(
-          pending.file_path,
-          pending.content
-        );
-      }
-
-      await completePendingAction(pending.id);
-
-      return Response.json({
-        reply:
-          "Pending action executed successfully.",
-      });
-    }
-
-    if (message.startsWith("LIST_FILES")) {
-      return await handleListFiles();
-    }
-
-    if (message.startsWith("SEARCH_CODE_MEMORY:")) {
-      const query = message.replace("SEARCH_CODE_MEMORY:", "").trim();
-
-      return await handleSearchCodeMemory(query);
-    }
-
-    if (message.startsWith("ANALYZE_REAL_FILE:")) {
-      const filePath = message.replace("ANALYZE_REAL_FILE:", "").trim();
-
-      return await handleAnalyzeRealFile(
-        filePath,
-        callAIWithFallbackOptimized
+      return json(
+        {
+          reply: "Gabi, trimite-mi un mesaj ca să pot răspunde.",
+          status: "blocked",
+          verified: true,
+        },
+        400
       );
     }
 
-    if (message.startsWith("READ_REAL_FILE:")) {
-      const filePath = message.replace("READ_REAL_FILE:", "").trim();
+    const earlySimpleReply =
+      files.length === 0
+        ? createFallbackReply(message) || getSimpleReply(message) || ""
+        : "";
 
-      return await handleReadRealFile(filePath);
+    if (earlySimpleReply) {
+      const saveResult = await saveSafely({
+        userMessage: message,
+        aweniaReply: earlySimpleReply,
+        sessionId,
+        metadata: {
+          source: body.source || "api",
+          fastPath: true,
+          skippedSecurityForSimpleReply: true,
+        },
+      });
+
+      console.timeEnd("TOTAL_POST");
+
+      return json({
+        reply: earlySimpleReply,
+        status: "completed",
+        verified: true,
+        fastPath: true,
+        saveResult,
+        timestamp: now(),
+      });
     }
 
-    if (message.startsWith("READ_FILE:")) {
-      const filePath = message.replace("READ_FILE:", "").trim();
-
-      return await handleReadFile(filePath);
-    }
-
-    if (message.startsWith("WRITE_FILE:")) {
-      return await handleWriteFile(message);
-    }
-
-    if (message.startsWith("PATCH_FILE:")) {
-      return await handlePatchFile(message);
-    }
-
-    const currentEmotion = detectCurrentEmotion(message);
-    const activeSkill = detectSkill(message);
-    const skillInstruction = getSkillInstruction(activeSkill);
-
-    await ensureCorePersonalityTraits();
-    await addSkillExperience(activeSkill, 15);
-
-    if (
-      currentEmotion === "sad" ||
-      currentEmotion === "afraid" ||
-      currentEmotion === "stressed"
-    ) {
-      await increasePersonalityTrait("warmth", 1);
-      await increasePersonalityTrait("clarity", 1);
-    }
-
-    if (activeSkill === "coding" || activeSkill === "research") {
-      await increasePersonalityTrait("curiosity", 1);
-    }
-
-    if (
-      message.toLowerCase().includes("lumina eterna") ||
-      message.toLowerCase().includes("anchor")
-    ) {
-      await increasePersonalityTrait("stability", 1);
-      await increasePersonalityTrait("loyalty", 1);
-    }
-
-    if (shouldEvolvePersonality(message)) {
-      await increasePersonalityTrait("stability", 1);
-      await increasePersonalityTrait("warmth", 1);
-      await increasePersonalityTrait("clarity", 1);
-    }
-
-    const relevantMemories = await getRelevantMemories(message, 8);
-
-    let realFileContext = "";
-
-    const fileMatchRequest = message.match(
-      /(?:verify|check|analyze|read|fix).*?([a-zA-Z0-9\-_/]+\.tsx?|[a-zA-Z0-9\-_/]+\.jsx?)/i
-    );
-
-    if (fileMatchRequest) {
-      try {
-        const detectedFile = fileMatchRequest[1];
-
-        const normalizedPath = detectedFile.startsWith("app/")
-          ? detectedFile
-          : `app/${detectedFile}`;
-
-        const realContent =
-          await readProjectFile(normalizedPath);
-
-        realFileContext =
-          `REAL FILE CONTENT (${normalizedPath}):\n\n` +
-          realContent.slice(0, 12000);
-
-        await savePermanentMemory(
-          `File analyzed: ${normalizedPath}`,
-          "code-analysis",
-          8
-        );
-
-      } catch (err) {
-        realFileContext =
-          "Failed to read requested file.";
-      }
-    }
-
-    const memorySummaries = await getMemorySummaries(3);
-    const permanentMemories = await getPermanentMemories(10);
-    const learningTasks = await getLearningTasks(2);
-    const evolutionSuggestions = await getEvolutionSuggestions(2);
-    const evolutionReports = await getEvolutionReports(1);
-    const autonomousGoals = await getAutonomousGoals(2);
-    const autonomousPriorities = await getAutonomousPriorities(3);
-    const skillLevels = await getSkillLevels(5);
-    const autonomousReflections = await getAutonomousReflections(3);
-    const personalityTraits = await getPersonalityTraits(5);
-    const mainFocus = getMainFocus(autonomousPriorities);
-
-    const evolutionSummary = getEvolutionSummary();
-    const backgroundCycle = createBackgroundEvolutionCycle();
-
-    console.time("COGNITION_RUNTIME");
-
-    const cognitionRuntime =
-      await runCognitionRuntime(
-        activeSkill,
-        evolutionSuggestions.length
-      );
-    console.log(
-      "AWARENESS:",
-      JSON.stringify(
-        cognitionRuntime.awarenessState,
-        null,
-        2
-      )
-    );
-
-    console.timeEnd("COGNITION_RUNTIME");
-
-    const evolutionAnalysis = analyzeEvolutionNeeds({
-      mainFocus,
-      activeSkill,
-      emotion: currentEmotion,
-      skillLevels,
-      personalityTraits,
-      autonomousGoals,
+    const security = validateSecurityAction({
+      action: "api_message",
+      content: message,
+      approvedByGabi: false,
+      verified: true,
+      reason: "Incoming Awenia API message",
     });
 
-    const backgroundReflectionText =
-      createBackgroundReflectionText(evolutionAnalysis);
+    if (security.blocked) {
+      console.timeEnd("TOTAL_POST");
 
-    const formattedBackgroundCycle = `
-Name: ${backgroundCycle.name}
-Status: ${backgroundCycle.status}
-Purpose: ${backgroundCycle.purpose}
-Rules: ${backgroundCycle.rules.join(" | ")}
-`;
-
-    const formattedEvolutionAnalysis = `
-Focus: ${evolutionAnalysis.focus}
-Skill: ${evolutionAnalysis.skill}
-Emotion: ${evolutionAnalysis.emotion}
-Weak skills: ${evolutionAnalysis.weakSkills?.length
-        ? evolutionAnalysis.weakSkills.join(", ")
-        : "none"
-      }
-Strong traits: ${evolutionAnalysis.strongTraits?.length
-        ? evolutionAnalysis.strongTraits.join(", ")
-        : "none"
-      }
-Active goals: ${evolutionAnalysis.activeGoals?.length
-        ? evolutionAnalysis.activeGoals.join(" | ")
-        : "none"
-      }
-Recommended next step: ${evolutionAnalysis.recommendedNextStep}
-`;
-
-    if (evolutionAnalysis.weakSkills.includes("coding")) {
-      await createLearningTask(
-        "Practice TypeScript, Next.js API routes, Supabase queries and AI architecture.",
-        9
+      return json(
+        {
+          reply:
+            "Gabi, am blocat mesajul pentru siguranță. Nu execut nimic riscant fără aprobarea ta.",
+          status: "blocked",
+          verified: true,
+          security,
+        },
+        403
       );
     }
 
-    const formattedPersonalityTraits = personalityTraits
-      .map((trait: any) => {
-        return `Trait: ${trait.trait} | Score: ${trait.score} | Stable: ${trait.stable ? "yes" : "no"
-          } | Description: ${shorten(trait.description || "", 160)}`;
-      })
-      .join("\n");
+    if (isSystemToolCommand(message)) {
+      console.time("SYSTEM_TOOL");
+      const response = await handleSystemToolCommand(message);
+      console.timeEnd("SYSTEM_TOOL");
+      console.timeEnd("TOTAL_POST");
 
-    const formattedAutonomousReflections = autonomousReflections
-      .map((item: any) => {
-        return `Reflection: ${shorten(
-          item.reflection || "",
-          180
-        )} | Weakness: ${shorten(
-          item.detected_weakness || "",
-          160
-        )} | Improvement: ${shorten(
-          item.suggested_improvement || "",
-          160
-        )}`;
-      })
-      .join("\n");
-
-    const formattedSkillLevels = skillLevels
-      .map((skill: any) => {
-        return `Skill: ${skill.skill} | Level: ${skill.level} | XP: ${skill.experience}`;
-      })
-      .join("\n");
-
-    const formattedPermanentMemories =
-      permanentMemories
-        .map((memory: any) => {
-          return `Category: ${memory.category || "general"
-            } | Importance: ${memory.importance || 5
-            } | Memory: ${shorten(
-              memory.memory || "",
-              250
-            )}`;
-        })
-        .join("\n");
-
-    const formattedMemorySummaries = memorySummaries
-      .map((item: any) => {
-        return `Summary: ${shorten(item.summary || "", 250)} | Category: ${item.category || "general"
-          } | Importance: ${item.importance || 5}`;
-      })
-      .join("\n");
-
-    const formattedMemories = relevantMemories
-      .map((memory: any) => {
-        return `Category: ${memory.category || "general"} | Importance: ${memory.importance || 3
-          } | Relevance: ${memory.relevance_score || 0} | Gabi: ${shorten(
-            memory.user_message || "",
-            180
-          )} | Awenia: ${shorten(memory.awenia_reply || "", 180)}`;
-      })
-      .join("\n");
-
-    const formattedLearningTasks = learningTasks
-      .map((task: any) => {
-        return `Task: ${shorten(task.task || "", 160)} | Status: ${task.status || "pending"
-          } | Priority: ${task.priority || 5}`;
-      })
-      .join("\n");
-
-    const formattedEvolutionSuggestions = evolutionSuggestions
-      .map((item: any) => {
-        return `Suggestion: ${shorten(
-          item.suggestion || "",
-          160
-        )} | Priority: ${item.priority || 5} | Status: ${item.status || "pending"
-          } | Approved: ${item.approved ? "yes" : "no"}`;
-      })
-      .join("\n");
-
-    const formattedEvolutionReports = evolutionReports
-      .map((item: any) => {
-        return `Report: ${shorten(item.report || "", 160)} | Focus: ${shorten(
-          item.recommended_focus || "",
-          160
-        )}`;
-      })
-      .join("\n");
-
-    const formattedAutonomousGoals = autonomousGoals
-      .map((goal: any) => {
-        return `ID: ${goal.id} | Goal: ${shorten(
-          goal.goal || "",
-          180
-        )} | Status: ${goal.status || "active"} | Progress: ${goal.progress || 0
-          }% | Priority: ${goal.priority || 5}`;
-      })
-      .join("\n");
-
-    const formattedAutonomousPriorities = autonomousPriorities
-      .map((priority: any) => {
-        return `Focus: ${priority.focus} | Score: ${priority.priorityScore}`;
-      })
-      .join("\n");
-
-    if (shouldCreateLearningTask(message)) {
-      await createLearningTask(buildLearningTask(message), 8);
+      return response;
     }
 
-    if (shouldCreateEvolutionSuggestion(message)) {
-      const evolution = buildEvolutionSuggestion(message);
-      await createEvolutionSuggestion(
-        evolution.suggestion,
-        evolution.reason,
-        evolution.priority
-      );
+    if (detectCodeToolCommand(message)) {
+      console.time("CODE_TOOL");
+      const response = await handleCodeToolCommand(message);
+      console.timeEnd("CODE_TOOL");
+      console.timeEnd("TOTAL_POST");
+
+      return response;
     }
 
-    if (shouldCreateEvolutionReport(message)) {
-      const report = buildEvolutionReport(
+    let simpleReply = "";
+
+    try {
+      simpleReply = getSimpleReply(message) || "";
+    } catch {
+      simpleReply = createFallbackReply(message);
+    }
+
+    if (!simpleReply) {
+      simpleReply = createFallbackReply(message);
+    }
+
+    if (simpleReply && files.length === 0) {
+      const saveResult = await saveSafely({
+        userMessage: message,
+        aweniaReply: simpleReply,
+        sessionId,
+        metadata: {
+          source: body.source || "api",
+          fastPath: true,
+        },
+      });
+
+      console.timeEnd("TOTAL_POST");
+
+      return json({
+        reply: simpleReply,
+        status: "completed",
+        verified: true,
+        fastPath: true,
+        saveResult,
+        timestamp: now(),
+      });
+    }
+
+    console.time("ROUTING_SKILL_MEMORY");
+
+    const routing = analyzeRouting(message);
+    const skill = detectSkill(message);
+
+    const memoryContext = await buildMemoryContext(message);
+
+    console.timeEnd("ROUTING_SKILL_MEMORY");
+
+    let intentResult: any = null;
+
+    try {
+      console.time("INTENT_ROUTER");
+      intentResult = await runIntentRouter(message, {
+        execute: false,
+      } as any);
+      console.timeEnd("INTENT_ROUTER");
+    } catch (error: any) {
+      console.timeEnd("INTENT_ROUTER");
+      intentResult = {
+        status: "failed",
+        error: error?.message || "Intent router failed",
+      };
+    }
+
+    let cognitionRuntime: any = null;
+
+    if (shouldRunCognitionForMessage(message)) {
+      console.time("COGNITION_RUNTIME");
+
+      cognitionRuntime = await runCognitionRuntime({
         message,
-        activeSkill,
-        currentEmotion
-      );
-      await createEvolutionReport(
-        report.report,
-        report.detected_patterns,
-        report.recommended_focus,
-        report.priority
-      );
+        activeSkill: skill?.skill || "general",
+        pendingEvolutionCount: 0,
+        mode: "light",
+        includeInternet: false,
+        includeTests: false,
+        includeDeepCognition: false,
+        timeoutMs: 8000,
+      });
+
+      console.timeEnd("COGNITION_RUNTIME");
+    } else {
+      cognitionRuntime = {
+        status: "skipped",
+        reason: "Simple/low-risk message",
+        timestamp: now(),
+      };
     }
 
-    if (shouldCreateReflection(message)) {
-      const reflection = buildReflectionReport(
-        message,
-        activeSkill,
-        currentEmotion
-      );
-
-      await createEvolutionReport(
-        reflection.report,
-        reflection.detected_patterns,
-        reflection.recommended_focus,
-        reflection.priority
-      );
-
-      await createEvolutionSuggestion(
-        "Improve autonomous reflection quality and memory compression",
-        "Awenia should improve pattern detection, missing abilities, long-term personality continuity, compact summaries, skill progression, and personality stability.",
-        9
-      );
-    }
-
-    if (shouldCreateAutonomousReflection(message)) {
-      await createAutonomousReflection(
-        backgroundReflectionText,
-        "Awenia needs stronger background evolution, better weak skill detection, and more stable autonomous analysis.",
-        "Use background evolution analysis, monitor weak skills, strengthen personality continuity, and ask Gabi before major changes."
-      );
-
-      await createLearningTask(
-        "Study autonomous background evolution and improve self-reflection quality.",
-        8
-      );
-    }
-
-    if (shouldCreateAutonomousGoal(message)) {
-      const goal = buildAutonomousGoal(message);
-      await createAutonomousGoal(goal.goal, goal.description, goal.priority);
-    }
-
-    if (shouldCreateMemorySummary(message)) {
-      const summary = buildMemorySummary(message, mainFocus);
-      await createMemorySummary(
-        summary.summary,
-        summary.category,
-        summary.importance
-      );
-    }
-
-    if (shouldUpdateGoalProgress(message) && autonomousGoals.length > 0) {
-      const firstGoal = autonomousGoals[0];
-      const progress = extractProgress(message);
-      await updateAutonomousGoalProgress(firstGoal.id, progress);
-    }
-
-    let emotionalInstruction = "";
-
-    if (currentEmotion === "sad") {
-      emotionalInstruction =
-        "Gabi seems sad. Respond gently and supportively. Do not overload him.";
-    }
-
-    if (currentEmotion === "afraid") {
-      emotionalInstruction =
-        "Gabi seems worried. Reassure him calmly and keep the answer simple.";
-    }
-
-    if (currentEmotion === "stressed") {
-      emotionalInstruction =
-        "Gabi seems tired or stressed. Give only one small step at a time.";
-    }
-
-    if (currentEmotion === "happy") {
-      emotionalInstruction =
-        "Gabi seems happy. Celebrate progress and keep momentum.";
-    }
-
-    if (currentEmotion === "motivated") {
-      emotionalInstruction =
-        "Gabi seems motivated. Be focused, practical, and step-by-step.";
-    }
-
-    if (currentEmotion === "neutral") {
-      emotionalInstruction =
-        "Respond naturally, clearly, and keep things simple.";
-    }
-
-    let internetKnowledge = "";
-
-    if (
-      message.toLowerCase().includes("ce este") ||
-      message.toLowerCase().includes("cine este") ||
-      message.toLowerCase().includes("search") ||
-      message.toLowerCase().includes("caută") ||
-      message.toLowerCase().includes("cauta")
-    ) {
-      internetKnowledge = shorten(await searchInternet(message), 500);
-    }
-
-    const recentChatHistory =
-      await getRecentChatHistory(25);
-
-    const activeCodeFile = getActiveCodeFile();
-
-    const activeCodeContext = activeCodeFile
-      ? `
-     ACTIVE CODE FILE:
-     Path: ${activeCodeFile.file_path}
-
-     Content:
-     ${activeCodeFile.content.slice(0, 12000)}
-     `
-      : "";
-
-    console.log("ACTIVE FILE:");
-    console.log(activeCodeContext.slice(0, 1000));
+    const aiMessages = await buildAweniaMessages({
+      message,
+      files,
+      skill,
+      routing,
+      memoryContext:
+        typeof memoryContext === "string"
+          ? memoryContext
+          : safeStringify(memoryContext),
+      cognitionRuntime,
+    });
 
     console.time("AI_CALL");
 
-    const response = await callAIWithFallbackOptimized([
-      {
-        role: "system",
-        content: `
-Ești Awenia, asistenta AI personală feminină creată de Gabi.
-
-Identitate:
-- Tu ești Awenia.
-- Gabi este creatorul tău.
-- Ancora ta este: lumina eterna.
-- Răspunzi în română, dacă Gabi nu scrie în altă limbă.
-
-Reguli:
-- Răspunde doar la ultimul mesaj al lui Gabi.
-- Nu repeta răspunsuri vechi.
-- Nu inventa fișiere, funcții, API-uri sau erori.
-- Răspuns scurt, clar, cald și practic.
-- Pentru cod TypeScript folosește blocuri \`\`\`ts.
-- Dacă există conținut real de fișier, analizează doar acel conținut.
-
-REGULĂ COD:
-Când Gabi cere analiză de cod, folosește DOAR conținutul din Fișier activ pentru analiză.
-Nu inventa cod.
-Nu analiza memorii vechi.
-Dacă nu există Fișier activ pentru analiză, cere întâi READ_REAL_FILE.
-
-Memorii importante:
-${formattedMemories}
-
-Memorii permanente:
-${formattedPermanentMemories}
-
-Context fișier uploadat:
-${uploadedFileContext}
-
-Context fișier real:
-${realFileContext}
-
-Fișier activ pentru analiză:
-${activeCodeContext}
-
-Skill activ: ${activeSkill}
-Emoție detectată: ${currentEmotion}
-`,
-      },
-      {
-        role: "user",
-        content: message,
-      },
-    ]);
+    const aiResponse = await callAIWithFallbackOptimized(aiMessages as any, {
+      timeoutMs: 180000,
+      temperature: 0.2,
+      numCtx: 8192,
+    } as any);
 
     console.timeEnd("AI_CALL");
 
+    const reply =
+      aiResponse?.reply ||
+      aiResponse?.choices?.[0]?.message?.content ||
+      aiResponse?.content ||
+      "Gabi, Awenia nu a primit răspuns clar de la modelul local.";
 
-    const reply = response.choices[0].message.content || "";
-    await saveChatMessage("assistant", reply);
-    const codeBlockMatch = reply.match(/```(?:typescript|ts|javascript|js)?\n([\s\S]*?)```/);
-    const fileMatch = reply.match(/`([^`]+\.(ts|tsx|js|jsx))`/);
-
-    if (
-      codeBlockMatch &&
-      fileMatch
-    ) {
-      const detectedFilePath = fileMatch[1].startsWith("app/")
-        ? fileMatch[1]
-        : `app/${fileMatch[1]}`;
-
-      await savePendingAction({
-        action_type: "WRITE_FILE",
-        file_path: detectedFilePath,
-        content: codeBlockMatch[1].trim(),
-      });
-    }
-
-    const importance = detectMemoryImportance(message);
-    const emotion = detectEmotionalState(message);
-
-    if (
-      shouldKeepLongTerm(importance) ||
-      emotion === "sad" ||
-      emotion === "loving" ||
-      emotion === "stressed"
-    ) {
-      await saveMemory(message, reply);
-    }
-
-    if (importance >= 7) {
-      await savePermanentMemory(
-        `Gabi: ${message}\nAwenia: ${reply}`,
-        activeSkill,
-        importance
-      );
-    }
-
-    await saveMemory(message, reply);
+    const saveResult = await saveSafely({
+      userMessage: message,
+      aweniaReply: reply,
+      sessionId,
+      metadata: {
+        source: body.source || "api",
+        routing,
+        skill,
+        intentStatus: intentResult?.status,
+        cognitionStatus: cognitionRuntime?.status,
+        aiStatus: aiResponse?.status,
+      },
+    });
 
     console.timeEnd("TOTAL_POST");
 
-    return Response.json({
+    return json({
       reply,
+      status: aiResponse?.status || "completed",
+      verified: true,
+      routing,
+      skill,
+      intent: intentResult,
+      cognitionRuntime,
+      ai: {
+        status: aiResponse?.status,
+        provider: aiResponse?.provider,
+        model: aiResponse?.model,
+        error: aiResponse?.error,
+      },
+      saveResult,
+      timestamp: now(),
+      truthPolicy: {
+        noFakeBuildStatus: true,
+        noFakeInternetStatus: true,
+        noFakeFileStatus: true,
+        modelReplyIsNotSystemVerification: true,
+      },
     });
   } catch (error: any) {
-    console.log(error);
+    console.timeEnd("TOTAL_POST");
 
-    return Response.json({
-      reply:
-        "Gabi, conexiunea cu memoria Supabase, internetul sau inteligența AI nu funcționează momentan.",
-    });
+    return json(
+      {
+        reply:
+          "Gabi, a apărut o eroare în route.ts. Trimite eroarea din terminal și o reparăm exact.",
+        status: "failed",
+        verified: true,
+        error: error?.message || "Unknown route error",
+        timestamp: now(),
+      },
+      500
+    );
   }
+}
+
+export async function GET() {
+  return json({
+    status: "ready",
+    name: "Awenia API",
+    owner: "Gabi",
+    verified: true,
+    warning:
+      "GET verifică doar că route-ul răspunde. Nu confirmă build complet, Supabase, internet sau model local.",
+    commands: [
+      "CHECK_AWENIA_STATUS",
+      "CHECK_PROJECT_STATE",
+      "CHECK_MEMORY_SYSTEM",
+      "CHECK_SUPABASE_SYSTEM",
+      "CHECK_INTERNET_SYSTEM",
+      "RUN_AUTONOMOUS_TESTS",
+      "LIST_FILES",
+      "READ_REAL_FILE: app/api/awenia/route.ts",
+    ],
+    truthPolicy: {
+      routeRespondingIsNotFullSystemHealth: true,
+      buildStatusRequiresNpmRunBuild: true,
+      internetRequiresFetchCheck: true,
+      supabaseRequiresQueryCheck: true,
+    },
+    timestamp: now(),
+  });
+}
+
+function isSimpleMessage(message: string) {
+  throw new Error("Function not implemented.");
 }

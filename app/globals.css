@@ -1,26 +1,117 @@
-@import "tailwindcss";
-
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --awenia-bg: #f9fafb;
+  --awenia-bg-soft: #eef2ff;
+  --awenia-surface: #ffffff;
+  --awenia-surface-soft: #f6f7fb;
+  --awenia-text: #111827;
+  --awenia-muted: #6b7280;
+  --awenia-border: #e5e7eb;
+  --awenia-primary: #111827;
+  --awenia-danger: #991b1b;
+  --awenia-success: #047857;
+  --awenia-warning: #92400e;
+  --awenia-radius: 18px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+* {
+  box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg,
+      var(--awenia-bg) 0%,
+      var(--awenia-bg-soft) 100%);
+  color: var(--awenia-text);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+button {
+  user-select: none;
+}
+
+textarea {
+  width: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+pre,
+code {
+  font-family:
+    Consolas,
+    Monaco,
+    "Courier New",
+    monospace;
+}
+
+pre {
+  white-space: pre;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f3f4f6;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c7cdd8;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+.awenia-hidden {
+  display: none !important;
+}
+
+.awenia-safe-text {
+  color: var(--awenia-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.awenia-card {
+  background: var(--awenia-surface);
+  border: 1px solid var(--awenia-border);
+  border-radius: var(--awenia-radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.04);
+}
+
+.awenia-code {
+  background: #0b1020;
+  color: #f9fafb;
+  border-radius: 14px;
+  overflow: auto;
+}
+
+@media (max-width: 720px) {
+  body {
+    font-size: 15px;
+  }
+
+  textarea {
+    font-size: 16px;
+  }
 }

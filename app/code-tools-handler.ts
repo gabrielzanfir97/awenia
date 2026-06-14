@@ -1,214 +1,633 @@
 import {
   listProjectFiles,
+  listProjectFilesDetailed,
   readProjectFile,
   writeProjectFile,
   patchProjectFile,
-} from "@/app/dev-agent";
+  rollbackProjectFile,
+  getProjectFileSnapshot,
+  analyzeProjectFileSafety,
+  validateProjectFilePath,
+  searchProjectFiles,
+  searchInsideProjectFiles,
+} from "./dev-agent";
 
 import {
-  searchCodeMemory,
-  getAllCodeMemories,
   saveCodeMemory,
-  createImpactAwareCodeSummary,
-  detectFilePurpose,
   setActiveCodeFile,
+  createSmartCodeSummary,
+  detectFilePurpose,
   extractExports,
   extractFunctions,
-} from "@/app/code-memory";
+  detectRiskLevel,
+} from "./code-memory";
 
-import { saveCodeEmbedding } from "@/app/embeddings";
-import { generatePatch } from "@/app/patch-generator";
-import { rollbackFile } from "@/app/rollback";
+import {
+  savePendingAction,
+  analyzePendingActionRisk,
+} from "./pending-actions";
 
-async function rememberCodeFile(filePath: string, content: string) {
-  await saveCodeMemory({
-    file_path: filePath,
-    file_purpose: detectFilePurpose(filePath, content),
-    code_summary: await createImpactAwareCodeSummary(filePath, content),
-    important_exports: extractExports(content).join(", "),
-    important_functions: extractFunctions(content).join(", "),
-    last_known_content: content.slice(0, 12000),
-  });
+export type CodeToolStatus =
+  | "completed"
+  | "pending_approval"
+  | "blocked"
+  | "failed"
+  | "needs_attention";
 
-  await saveCodeEmbedding(filePath, content);
+function now() {
+  return new Date().toISOString();
 }
 
-export async function handleListFiles() {
-  const files = await listProjectFiles();
+function jsonReply(data: any) {
+  return JSON.stringify(data, null, 2);
+}
 
+function response(tool: string, status: CodeToolStatus, data: any) {
   return Response.json({
-    reply: JSON.stringify(files, null, 2),
+    reply: jsonReply(data),
+    tool,
+    status,
+    data,
+    timestamp: now(),
   });
 }
 
-export async function handleSearchCodeMemory(query: string) {
-  const results = await searchCodeMemory(query);
+function stripCommand(message: string, commands: string[]) {
+  let cleaned = message.trim();
 
-  return Response.json({
-    reply: JSON.stringify(results, null, 2),
-  });
-}
-
-export async function handleReadRealFile(filePath: string) {
-  const content = await readProjectFile(filePath);
-
-  setActiveCodeFile(filePath, content);
-  await rememberCodeFile(filePath, content);
-
-  return Response.json({
-    reply: content,
-  });
-}
-
-export async function handleReadFile(filePath: string) {
-  const memoryResults = await searchCodeMemory(filePath);
-  const allCodeMemories = await getAllCodeMemories();
-
-  if (memoryResults && memoryResults.length > 0) {
-    const memory = memoryResults[0];
-
-    return Response.json({
-      reply:
-        "Am găsit fișierul în memoria de cod:\n\n" +
-        JSON.stringify(memory, null, 2) +
-        "\n\nProject code memory overview:\n\n" +
-        JSON.stringify(
-          allCodeMemories.map((item: any) => ({
-            file_path: item.file_path,
-            file_purpose: item.file_purpose,
-            code_summary: item.code_summary,
-            important_exports: item.important_exports,
-            important_functions: item.important_functions,
-          })),
-          null,
-          2
-        ),
-    });
+  for (const command of commands) {
+    if (cleaned.toUpperCase().startsWith(command.toUpperCase())) {
+      cleaned = cleaned.slice(command.length).trim();
+    }
   }
 
-  const content = await readProjectFile(filePath);
+  return cleaned;
+}
 
-  setActiveCodeFile(filePath, content);
-  await rememberCodeFile(filePath, content);
+function extractCodeBlock(text: string) {
+  const match = text.match(/```[\w-]*\n([\s\S]*?)```/);
 
-  return Response.json({
-    reply: content,
-  });
+  if (match?.[1]) {
+    return match[1].trim();
+  }
+
+  return text.trim();
+}
+
+function parsePathOnly(message: string, commands: string[]) {
+  const cleaned = stripCommand(message, commands);
+  return cleaned.split("\n")[0].trim();
+}
+
+function parsePathAndBody(message: string, commands: string[]) {
+  const cleaned = stripCommand(message, commands);
+  const lines = cleaned.split("\n");
+  const filePath = lines.shift()?.trim() || "";
+  const body = extractCodeBlock(lines.join("\n"));
+
+  return {
+    filePath,
+    body,
+  };
+}
+
+function parsePatch(message: string) {
+  const { filePath, body } = parsePathAndBody(message, [
+    "PATCH_FILE:",
+    "PATCH_REAL_FILE:",
+  ]);
+
+  const searchMatch = body.match(/SEARCH:\s*([\s\S]*?)\s*REPLACE:/i);
+  const replaceMatch = body.match(/REPLACE:\s*([\s\S]*)/i);
+
+  return {
+    filePath,
+    patch: body,
+    searchText: searchMatch?.[1]?.trim() || "",
+    replacementText: replaceMatch?.[1]?.trim() || "",
+  };
+}
+
+async function rememberCodeFile(
+  filePath: string,
+  content: string,
+  source = "code-tools-handler"
+) {
+  try {
+    await setActiveCodeFile(filePath);
+
+    const summary = await (createSmartCodeSummary as any)(
+      filePath,
+      content
+    );
+
+    const memoryPayload = {
+      file_path: filePath,
+      file_purpose: (detectFilePurpose as any)(filePath, content),
+      code_summary: summary,
+      important_exports: (extractExports as any)(content),
+      important_functions: (extractFunctions as any)(content),
+      risk_level: (detectRiskLevel as any)(filePath, content),
+      last_known_content: content.slice(0, 12000),
+      source,
+      updated_at: now(),
+    };
+
+    await (saveCodeMemory as any)(memoryPayload);
+
+    return {
+      saved: true,
+      memoryPayload,
+    };
+  } catch (error: any) {
+    return {
+      saved: false,
+      error: error?.message || "Code memory save failed",
+    };
+  }
+}
+
+export async function handleListFiles(message = "LIST_FILES: app") {
+  try {
+    const startDirectory =
+      parsePathOnly(message, ["LIST_FILES:", "LIST_PROJECT_FILES:"]) ||
+      "app";
+
+    const files = await listProjectFiles(startDirectory);
+    const detailed = await listProjectFilesDetailed(startDirectory);
+
+    return response("LIST_FILES", "completed", {
+      status: "completed",
+      startDirectory,
+      count: files.length,
+      files,
+      detailed,
+    });
+  } catch (error: any) {
+    return response("LIST_FILES", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown LIST_FILES error",
+    });
+  }
+}
+
+export async function handleReadRealFile(message: string) {
+  try {
+    const filePath = parsePathOnly(message, [
+      "READ_REAL_FILE:",
+      "READ_FILE:",
+    ]);
+
+    if (!filePath) {
+      return response("READ_REAL_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "Missing file path",
+      });
+    }
+
+    const safety = await analyzeProjectFileSafety(filePath);
+    const content = await readProjectFile(filePath);
+    const memory = await rememberCodeFile(
+      filePath,
+      content,
+      "READ_REAL_FILE"
+    );
+
+    return response("READ_REAL_FILE", "completed", {
+      status: "completed",
+      filePath,
+      safety,
+      content,
+      memory,
+    });
+  } catch (error: any) {
+    return response("READ_REAL_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown READ_REAL_FILE error",
+    });
+  }
+}
+
+export async function handleReadFile(message: string) {
+  return handleReadRealFile(message);
+}
+
+export async function handleAnalyzeRealFile(message: string) {
+  try {
+    const filePath = parsePathOnly(message, [
+      "ANALYZE_REAL_FILE:",
+      "ANALYZE_FILE:",
+    ]);
+
+    if (!filePath) {
+      return response("ANALYZE_REAL_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "Missing file path",
+      });
+    }
+
+    const snapshot = await getProjectFileSnapshot(filePath);
+
+    if (!snapshot.exists) {
+      return response("ANALYZE_REAL_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "File does not exist",
+        snapshot,
+      });
+    }
+
+    const content = await readProjectFile(filePath);
+
+    const analysis = {
+      filePath,
+      purpose: (detectFilePurpose as any)(filePath, content),
+      riskLevel: (detectRiskLevel as any)(filePath, content),
+      exports: (extractExports as any)(content),
+      functions: (extractFunctions as any)(content),
+      summary: await (createSmartCodeSummary as any)(filePath, content),
+      safety: await analyzeProjectFileSafety(filePath),
+      snapshot,
+    };
+
+    const memory = await rememberCodeFile(
+      filePath,
+      content,
+      "ANALYZE_REAL_FILE"
+    );
+
+    return response("ANALYZE_REAL_FILE", "completed", {
+      status: "completed",
+      analysis,
+      memory,
+    });
+  } catch (error: any) {
+    return response("ANALYZE_REAL_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown ANALYZE_REAL_FILE error",
+    });
+  }
 }
 
 export async function handleWriteFile(message: string) {
-  const parts = message.split("---CONTENT---");
+  try {
+    const { filePath, body } = parsePathAndBody(message, [
+      "WRITE_FILE:",
+      "WRITE_REAL_FILE:",
+    ]);
 
-  const filePath = parts[0].replace("WRITE_FILE:", "").trim();
-  const content = parts[1]?.trim();
+    if (!filePath || !body) {
+      return response("WRITE_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "Missing file path or content",
+      });
+    }
 
-  if (!filePath || !content) {
-    return Response.json({
-      reply:
-        "Format greșit. Folosește WRITE_FILE: app/file.ts ---CONTENT--- codul aici",
+    const risk = analyzePendingActionRisk({
+      action_type: "WRITE_FILE",
+      file_path: filePath,
+      content: body,
+      reason: "Awenia generated file write",
+      source: "code-tools-handler",
+    });
+
+    const pendingAction = await savePendingAction({
+      action_type: "WRITE_FILE",
+      file_path: filePath,
+      content: body,
+      reason: "Awenia generated file write",
+      source: "code-tools-handler",
+      metadata: {
+        risk,
+      },
+    });
+
+    return response(
+      "WRITE_FILE",
+      risk.blocked ? "blocked" : "pending_approval",
+      {
+        status: risk.blocked ? "blocked" : "pending_approval",
+        message:
+          "Write action saved as pending. It must be approved before execution.",
+        filePath,
+        risk,
+        pendingAction,
+      }
+    );
+  } catch (error: any) {
+    return response("WRITE_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown WRITE_FILE error",
     });
   }
-
-  const result = await writeProjectFile(filePath, content);
-
-  setActiveCodeFile(filePath, content);
-  await rememberCodeFile(filePath, content);
-
-  return Response.json({
-    reply: `Fișier modificat: ${filePath}\nBackup: ${result.backup}`,
-  });
 }
 
 export async function handlePatchFile(message: string) {
-  const parts = message.split("---SEARCH---");
+  try {
+    const parsed = parsePatch(message);
 
-  const filePath = parts[0].replace("PATCH_FILE:", "").trim();
-  const searchAndReplace = parts[1]?.split("---REPLACE---");
-  const searchText = searchAndReplace?.[0]?.trim();
-  const replaceText = searchAndReplace?.[1]?.trim();
+    if (!parsed.filePath || !parsed.patch) {
+      return response("PATCH_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "Missing file path or patch content",
+      });
+    }
 
-  if (!filePath || !searchText || !replaceText) {
-    return Response.json({
-      reply: "Format greșit pentru PATCH_FILE.",
+    const risk = analyzePendingActionRisk({
+      action_type: "PATCH_FILE",
+      file_path: parsed.filePath,
+      patch: parsed.patch,
+      reason: "Awenia generated file patch",
+      source: "code-tools-handler",
+    });
+
+    const pendingAction = await savePendingAction({
+      action_type: "PATCH_FILE",
+      file_path: parsed.filePath,
+      patch: parsed.patch,
+      reason: "Awenia generated file patch",
+      source: "code-tools-handler",
+      metadata: {
+        risk,
+        searchText: parsed.searchText,
+        replacementText: parsed.replacementText,
+      },
+    });
+
+    return response(
+      "PATCH_FILE",
+      risk.blocked ? "blocked" : "pending_approval",
+      {
+        status: risk.blocked ? "blocked" : "pending_approval",
+        message:
+          "Patch action saved as pending. It must be approved before execution.",
+        filePath: parsed.filePath,
+        risk,
+        pendingAction,
+      }
+    );
+  } catch (error: any) {
+    return response("PATCH_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown PATCH_FILE error",
     });
   }
-
-  const result = await patchProjectFile(filePath, searchText, replaceText);
-  const updatedContent = await readProjectFile(filePath);
-
-  setActiveCodeFile(filePath, updatedContent);
-  await rememberCodeFile(filePath, updatedContent);
-
-  return Response.json({
-    reply: `Patch aplicat: ${filePath}\nBackup: ${result.backup}`,
-  });
 }
 
-export async function handleAnalyzeRealFile(
-  filePath: string,
-  callAI: (messages: any[]) => Promise<any>
-) {
-  const content = await readProjectFile(filePath);
+export async function handleExecuteWriteFile(message: string) {
+  try {
+    const { filePath, body } = parsePathAndBody(message, [
+      "EXECUTE_WRITE_FILE:",
+    ]);
 
-  setActiveCodeFile(filePath, content);
-  await rememberCodeFile(filePath, content);
+    const validation = validateProjectFilePath(filePath, "write");
 
-  const response = await callAI([
-    {
-      role: "system",
-      content: `
-Ești Awenia, asistent de programare pentru Gabi.
+    if (!validation.allowed) {
+      return response("EXECUTE_WRITE_FILE", "blocked", {
+        status: "blocked",
+        validation,
+      });
+    }
 
-Analizează DOAR codul primit mai jos.
-Nu inventa cod.
-Nu folosi memorii.
-Găsește buguri reale, optimizări reale și patch concret.
-Răspunde în română.
+    const result = await writeProjectFile(filePath, body);
+    const memory = await rememberCodeFile(
+      filePath,
+      body,
+      "EXECUTE_WRITE_FILE"
+    );
 
-FIȘIER:
-${filePath}
+    return response("EXECUTE_WRITE_FILE", "completed", {
+      status: "completed",
+      result,
+      memory,
+    });
+  } catch (error: any) {
+    return response("EXECUTE_WRITE_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown EXECUTE_WRITE_FILE error",
+    });
+  }
+}
 
-COD:
-${content.slice(0, 12000)}
-`,
-    },
-    {
-      role: "user",
-      content:
-        "Analizează acest fișier. Găsește un bug real, explică-l și propune un patch. Nu modifica nimic fără aprobarea mea.",
-    },
-  ]);
+export async function handleExecutePatchFile(message: string) {
+  try {
+    const parsed = parsePatch(message);
 
-  return Response.json({
-    reply: response.choices[0].message.content || "Nu am găsit analiză.",
-  });
+    if (!parsed.filePath || !parsed.searchText || !parsed.replacementText) {
+      return response("EXECUTE_PATCH_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason:
+          "Patch execution needs file path plus SEARCH: and REPLACE: blocks.",
+      });
+    }
+
+    const validation = validateProjectFilePath(parsed.filePath, "patch");
+
+    if (!validation.allowed) {
+      return response("EXECUTE_PATCH_FILE", "blocked", {
+        status: "blocked",
+        validation,
+      });
+    }
+
+    const result = await patchProjectFile(
+      parsed.filePath,
+      parsed.searchText,
+      parsed.replacementText
+    );
+
+    const content = await readProjectFile(parsed.filePath);
+    const memory = await rememberCodeFile(
+      parsed.filePath,
+      content,
+      "EXECUTE_PATCH_FILE"
+    );
+
+    return response("EXECUTE_PATCH_FILE", "completed", {
+      status: "completed",
+      result,
+      memory,
+    });
+  } catch (error: any) {
+    return response("EXECUTE_PATCH_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown EXECUTE_PATCH_FILE error",
+    });
+  }
+}
+
+export async function handleRollbackFile(message: string) {
+  try {
+    const filePath = parsePathOnly(message, [
+      "ROLLBACK_FILE:",
+      "ROLLBACK_REAL_FILE:",
+    ]);
+
+    if (!filePath) {
+      return response("ROLLBACK_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "Missing file path",
+      });
+    }
+
+    const risk = analyzePendingActionRisk({
+      action_type: "ROLLBACK_FILE",
+      file_path: filePath,
+      reason: "Awenia requested rollback",
+      source: "code-tools-handler",
+    });
+
+    const pendingAction = await savePendingAction({
+      action_type: "ROLLBACK_FILE",
+      file_path: filePath,
+      reason: "Awenia requested rollback",
+      source: "code-tools-handler",
+      metadata: {
+        risk,
+      },
+    });
+
+    return response(
+      "ROLLBACK_FILE",
+      risk.blocked ? "blocked" : "pending_approval",
+      {
+        status: risk.blocked ? "blocked" : "pending_approval",
+        message:
+          "Rollback action saved as pending. It must be approved before execution.",
+        filePath,
+        risk,
+        pendingAction,
+      }
+    );
+  } catch (error: any) {
+    return response("ROLLBACK_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown ROLLBACK_FILE error",
+    });
+  }
+}
+
+export async function handleExecuteRollbackFile(message: string) {
+  try {
+    const filePath = parsePathOnly(message, ["EXECUTE_ROLLBACK_FILE:"]);
+
+    if (!filePath) {
+      return response("EXECUTE_ROLLBACK_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "Missing file path",
+      });
+    }
+
+    const result = await rollbackProjectFile(filePath);
+    const content = await readProjectFile(filePath);
+    const memory = await rememberCodeFile(
+      filePath,
+      content,
+      "EXECUTE_ROLLBACK_FILE"
+    );
+
+    return response("EXECUTE_ROLLBACK_FILE", "completed", {
+      status: "completed",
+      result,
+      memory,
+    });
+  } catch (error: any) {
+    return response("EXECUTE_ROLLBACK_FILE", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown EXECUTE_ROLLBACK_FILE error",
+    });
+  }
 }
 
 export async function handleGeneratePatch(message: string) {
-  const parts = message.split("---");
+  try {
+    const { filePath, body } = parsePathAndBody(message, [
+      "GENERATE_PATCH:",
+      "CREATE_PATCH:",
+    ]);
 
-  const filePath = parts[1]?.trim();
-  const searchText = parts[2]?.trim();
-  const replaceText = parts[3]?.trim();
+    if (!filePath || !body) {
+      return response("GENERATE_PATCH", "needs_attention", {
+        status: "needs_attention",
+        reason: "Missing file path or patch request",
+      });
+    }
 
-  if (!filePath || !searchText || !replaceText) {
-    return Response.json({
-      reply:
-        "Format: GENERATE_PATCH: --- filePath --- searchText --- replaceText",
+    const currentContent = await readProjectFile(filePath);
+    const safety = await analyzeProjectFileSafety(filePath);
+
+    const patchPlan = {
+      filePath,
+      request: body,
+      safety,
+      currentPreview: currentContent.slice(0, 3000),
+      instruction:
+        "Generate a SEARCH/REPLACE patch using the currentPreview as verified file context.",
+      format: {
+        search: "SEARCH:",
+        replace: "REPLACE:",
+      },
+    };
+
+    await rememberCodeFile(
+      filePath,
+      currentContent,
+      "GENERATE_PATCH"
+    );
+
+    return response("GENERATE_PATCH", "completed", {
+      status: "completed",
+      patchPlan,
+    });
+  } catch (error: any) {
+    return response("GENERATE_PATCH", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown GENERATE_PATCH error",
     });
   }
-
-  const patch = generatePatch(filePath, searchText, replaceText);
-
-  return Response.json({
-    reply: patch,
-  });
 }
 
-export async function handleRollbackFile(filePath: string) {
-  const result = await rollbackFile(filePath, filePath);
+export async function handleSearchFiles(message: string) {
+  try {
+    const query = stripCommand(message, [
+      "SEARCH_FILES:",
+      "FIND_FILES:",
+    ]);
 
-  return Response.json({
-    reply: JSON.stringify(result, null, 2),
-  });
+    const matches = await searchProjectFiles(query || "", "app");
+
+    return response("SEARCH_FILES", "completed", {
+      status: "completed",
+      query,
+      count: matches.length,
+      matches,
+    });
+  } catch (error: any) {
+    return response("SEARCH_FILES", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown SEARCH_FILES error",
+    });
+  }
+}
+
+export async function handleSearchInsideFiles(message: string) {
+  try {
+    const query = stripCommand(message, [
+      "SEARCH_INSIDE_FILES:",
+      "SEARCH_CODE:",
+    ]);
+
+    const matches = await searchInsideProjectFiles(query || "", "app", 20);
+
+    return response("SEARCH_INSIDE_FILES", "completed", {
+      status: "completed",
+      query,
+      count: matches.length,
+      matches,
+    });
+  } catch (error: any) {
+    return response("SEARCH_INSIDE_FILES", "failed", {
+      status: "failed",
+      error: error?.message || "Unknown SEARCH_INSIDE_FILES error",
+    });
+  }
 }

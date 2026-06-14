@@ -1,69 +1,207 @@
+import { buildCognitiveArchitecture } from "./cognitive-architecture";
+import { optimizeCognition } from "./cognitive-optimization";
 import { runDistributedIntelligence } from "./distributed-intelligence";
-import { buildConsciousnessState } from "./consciousness";
-import { runEvolutionRuntime } from "./evolution-runtime";
+import { getAgentState } from "./agents";
+import { getAgentCommunicationStats } from "./agent-communication";
 
-export async function runAIEcosystem() {
-  const distributed =
-    await runDistributedIntelligence();
+type EcosystemStatus =
+  | "stable"
+  | "active"
+  | "needs_attention"
+  | "partial"
+  | "failed";
 
-  const consciousness =
-    await buildConsciousnessState();
+function calculateEcosystemStatus(input: {
+  architectureStatus?: string;
+  optimizationStatus?: string;
+  distributedStatus?: string;
+  criticalTargets?: number;
+  sourceFailures?: number;
+}): EcosystemStatus {
+  if (
+    input.architectureStatus === "failed" ||
+    input.optimizationStatus === "failed" ||
+    input.distributedStatus === "failed"
+  ) {
+    return "failed";
+  }
 
-  const evolution =
-    await runEvolutionRuntime();
+  if ((input.criticalTargets || 0) > 0 || (input.sourceFailures || 0) > 0) {
+    return "needs_attention";
+  }
 
-  const consciousnessState =
-    consciousness.consciousness.state;
+  if (
+    input.distributedStatus === "partial" ||
+    input.architectureStatus === "degraded"
+  ) {
+    return "partial";
+  }
 
-  const awarenessScore =
-    consciousness.consciousness.selfUnderstanding
-      ?.awarenessScore || 0;
+  if (
+    input.optimizationStatus === "stable" &&
+    input.architectureStatus === "active"
+  ) {
+    return "stable";
+  }
 
-  const distributedActive =
-    distributed.distributedIntelligence.active;
+  return "active";
+}
 
-  const ecosystemHealth =
-    awarenessScore >= 80
-      ? "strong"
-      : awarenessScore >= 60
-      ? "developing"
-      : "needs_attention";
+function calculateEcosystemConfidence(input: {
+  architectureConfidence?: number;
+  optimizationConfidence?: number;
+  distributedConfidence?: number;
+  sourceFailures?: number;
+}) {
+  const values = [
+    input.architectureConfidence || 0,
+    input.optimizationConfidence || 0,
+    input.distributedConfidence || 0,
+  ];
 
-  return {
-    aiEcosystem: {
-      active: true,
+  const average =
+    values.reduce((sum, value) => sum + value, 0) / values.length;
 
-      systems: {
+  return Math.max(
+    0,
+    Math.min(100, Math.round(average - (input.sourceFailures || 0) * 10))
+  );
+}
+
+export async function runAIEcosystem(
+  task = "Analyze and coordinate Awenia AI ecosystem"
+) {
+  const startedAt = new Date().toISOString();
+
+  try {
+    const architecture = await buildCognitiveArchitecture();
+
+    const optimization = await optimizeCognition();
+
+    const distributed = await runDistributedIntelligence(task);
+
+    const sourceFailures =
+      architecture.architecture?.cognitiveState?.sourceFailures || 0;
+
+    const criticalTargets =
+      optimization.metrics?.criticalTargets || 0;
+
+    const status = calculateEcosystemStatus({
+      architectureStatus: architecture.architecture?.status,
+      optimizationStatus: optimization.status,
+      distributedStatus: distributed.status,
+      criticalTargets,
+      sourceFailures,
+    });
+
+    const confidence = calculateEcosystemConfidence({
+      architectureConfidence: architecture.architecture?.confidence,
+      optimizationConfidence: optimization.optimization?.confidence,
+      distributedConfidence: distributed.confidence,
+      sourceFailures,
+    });
+
+    const recommendedAction =
+      optimization.optimization?.recommendedAction ||
+      distributed.reasoning?.reasoning?.recommendedAction ||
+      architecture.architecture?.layers?.decision?.action ||
+      "Continue monitoring";
+
+    return {
+      status,
+
+      ecosystem: {
+        active: status !== "failed",
+
+        stable: status === "stable",
+
+        needsAttention:
+          status === "needs_attention" || status === "partial",
+
+        confidence,
+
+        task,
+
+        architecture,
+
+        optimization,
+
         distributed,
-        consciousness,
-        evolution,
+
+        agents: {
+          state: getAgentState(),
+          communicationStats: getAgentCommunicationStats(),
+        },
+
+        coordination: {
+          recommendedAction,
+          sourceFailures,
+          criticalTargets,
+
+          primaryDecision:
+            architecture.architecture?.layers?.decision || null,
+
+          primaryOptimizationTarget:
+            optimization.optimization?.primaryTarget || null,
+
+          distributedSuccess: distributed.success,
+        },
       },
 
-      ecosystemState: {
-        autonomous: distributedActive,
-        persistent: true,
-        adaptive: awarenessScore > 40,
-        protected: true,
-        evolving: evolution.status === "evolving",
+      execution: {
+        startedAt,
+        completedAt: new Date().toISOString(),
       },
 
-      ecosystemAnalysis: {
-        health: ecosystemHealth,
-        consciousnessState,
-        awarenessScore,
-        distributedActive,
+      timestamp: new Date().toISOString(),
+    };
+  } catch (error: any) {
+    return {
+      status: "failed",
+
+      ecosystem: {
+        active: false,
+        stable: false,
+        needsAttention: true,
+        confidence: 0,
+        task,
+
+        coordination: {
+          recommendedAction:
+            "Repair ai-ecosystem.ts or connected intelligence systems",
+          sourceFailures: 1,
+          criticalTargets: 1,
+          primaryDecision: null,
+          primaryOptimizationTarget: null,
+          distributedSuccess: false,
+        },
+
+        agents: {
+          state: getAgentState(),
+          communicationStats: getAgentCommunicationStats(),
+        },
       },
 
-      activeProcesses: [
-        "distributed reasoning",
-        "autonomous evolution",
-        "long-term memory",
-        "adaptive cognition",
-        "goal coordination",
-        "continuous optimization",
-      ],
-    },
+      execution: {
+        startedAt,
+        completedAt: new Date().toISOString(),
+      },
 
-    timestamp: new Date().toISOString(),
-  };
+      error: error?.message || "Unknown AI ecosystem error",
+
+      timestamp: new Date().toISOString(),
+    };
+  }
+}
+
+export async function buildAIEcosystem(task?: string) {
+  return runAIEcosystem(task);
+}
+
+export async function coordinateAIEcosystem(task?: string) {
+  return runAIEcosystem(task);
+}
+
+export async function analyzeAIEcosystem(task?: string) {
+  return runAIEcosystem(task);
 }
