@@ -12,35 +12,25 @@ import {
   getSimpleReply,
 } from "@/app/routing";
 
-import {
-  buildSystemPrompt,
-} from "@/app/system-prompt";
+import { buildSystemPrompt } from "@/app/system-prompt";
 
 import {
   buildMemoryContext,
   saveConversationMemory,
 } from "@/app/memory";
 
-import {
-  saveChatTurn,
-} from "@/app/chat-history";
+import { saveChatTurn } from "@/app/chat-history";
 
-import {
-  runIntentRouter,
-} from "@/app/intent-router";
+import { runIntentRouter } from "@/app/intent-router";
 
 import {
   detectSkill,
   buildSkillContext,
 } from "@/app/skills";
 
-import {
-  runCognitionRuntime,
-} from "@/app/cognition-runtime";
+import { runCognitionRuntime } from "@/app/cognition-runtime";
 
-import {
-  validateSecurityAction,
-} from "@/app/security";
+import { validateSecurityAction } from "@/app/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,9 +56,7 @@ function now() {
 }
 
 function json(data: any, status = 200) {
-  return NextResponse.json(data, {
-    status,
-  });
+  return NextResponse.json(data, { status });
 }
 
 function cleanMessage(message = "") {
@@ -108,6 +96,18 @@ function createFallbackReply(message: string) {
   }
 
   return "";
+}
+
+function getSafeSimpleReply(message: string) {
+  const fallback = createFallbackReply(message);
+
+  if (fallback) return fallback;
+
+  try {
+    return getSimpleReply(message) || "";
+  } catch {
+    return "";
+  }
 }
 
 function detectCodeToolCommand(message: string) {
@@ -263,7 +263,7 @@ async function buildAweniaMessages(input: {
 
   const systemPrompt = buildSystemPrompt({
     mode: "chat",
-    skill: input.skill?.skill || input.skill?.name || "general",
+    skill: input.skill?.skill || input.skill?.skill || "general",
     extraContext: [
       "Reguli importante:",
       "- Răspunde în română pentru Gabi.",
@@ -289,7 +289,7 @@ async function buildAweniaMessages(input: {
   } as any);
 
   const skillContext = buildSkillContext(
-    input.skill?.skill || input.skill?.name || "general"
+    input.skill?.skill || input.skill?.skill || "general"
   );
 
   const userContent = [
@@ -336,35 +336,59 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const earlySimpleReply =
-      files.length === 0
-        ? createFallbackReply(message) || getSimpleReply(message) || ""
-        : "";
+    // 1. Tool commands trebuie să intre înainte de security și înainte de simple reply.
+    if (isSystemToolCommand(message)) {
+      console.time("SYSTEM_TOOL");
 
-    if (earlySimpleReply) {
-      const saveResult = await saveSafely({
-        userMessage: message,
-        aweniaReply: earlySimpleReply,
-        sessionId,
-        metadata: {
-          source: body.source || "api",
-          fastPath: true,
-          skippedSecurityForSimpleReply: true,
-        },
-      });
+      const response = await handleSystemToolCommand(message);
 
+      console.timeEnd("SYSTEM_TOOL");
       console.timeEnd("TOTAL_POST");
 
-      return json({
-        reply: earlySimpleReply,
-        status: "completed",
-        verified: true,
-        fastPath: true,
-        saveResult,
-        timestamp: now(),
-      });
+      return response;
     }
 
+    if (detectCodeToolCommand(message)) {
+      console.time("CODE_TOOL");
+
+      const response = await handleCodeToolCommand(message);
+
+      console.timeEnd("CODE_TOOL");
+      console.timeEnd("TOTAL_POST");
+
+      return response;
+    }
+
+    // 2. Mesajele simple trebuie să răspundă repede, fără AI greu.
+    if (files.length === 0) {
+      const earlySimpleReply = getSafeSimpleReply(message);
+
+      if (earlySimpleReply) {
+        const saveResult = await saveSafely({
+          userMessage: message,
+          aweniaReply: earlySimpleReply,
+          sessionId,
+          metadata: {
+            source: body.source || "api",
+            fastPath: true,
+            skippedSecurityForSimpleReply: true,
+          },
+        });
+
+        console.timeEnd("TOTAL_POST");
+
+        return json({
+          reply: earlySimpleReply,
+          status: "completed",
+          verified: true,
+          fastPath: true,
+          saveResult,
+          timestamp: now(),
+        });
+      }
+    }
+
+    // 3. Security rămâne pentru mesajele normale.
     const security = validateSecurityAction({
       action: "api_message",
       content: message,
@@ -388,64 +412,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (isSystemToolCommand(message)) {
-      console.time("SYSTEM_TOOL");
-      const response = await handleSystemToolCommand(message);
-      console.timeEnd("SYSTEM_TOOL");
-      console.timeEnd("TOTAL_POST");
-
-      return response;
-    }
-
-    if (detectCodeToolCommand(message)) {
-      console.time("CODE_TOOL");
-      const response = await handleCodeToolCommand(message);
-      console.timeEnd("CODE_TOOL");
-      console.timeEnd("TOTAL_POST");
-
-      return response;
-    }
-
-    let simpleReply = "";
-
-    try {
-      simpleReply = getSimpleReply(message) || "";
-    } catch {
-      simpleReply = createFallbackReply(message);
-    }
-
-    if (!simpleReply) {
-      simpleReply = createFallbackReply(message);
-    }
-
-    if (simpleReply && files.length === 0) {
-      const saveResult = await saveSafely({
-        userMessage: message,
-        aweniaReply: simpleReply,
-        sessionId,
-        metadata: {
-          source: body.source || "api",
-          fastPath: true,
-        },
-      });
-
-      console.timeEnd("TOTAL_POST");
-
-      return json({
-        reply: simpleReply,
-        status: "completed",
-        verified: true,
-        fastPath: true,
-        saveResult,
-        timestamp: now(),
-      });
-    }
-
     console.time("ROUTING_SKILL_MEMORY");
 
     const routing = analyzeRouting(message);
     const skill = detectSkill(message);
-
     const memoryContext = await buildMemoryContext(message);
 
     console.timeEnd("ROUTING_SKILL_MEMORY");
@@ -454,12 +424,15 @@ export async function POST(request: NextRequest) {
 
     try {
       console.time("INTENT_ROUTER");
+
       intentResult = await runIntentRouter(message, {
         execute: false,
       } as any);
+
       console.timeEnd("INTENT_ROUTER");
     } catch (error: any) {
       console.timeEnd("INTENT_ROUTER");
+
       intentResult = {
         status: "failed",
         error: error?.message || "Intent router failed",
@@ -473,7 +446,7 @@ export async function POST(request: NextRequest) {
 
       cognitionRuntime = await runCognitionRuntime({
         message,
-        activeSkill: skill?.skill || "general",
+        activeSkill: skill?.skill || skill?.skill || "general",
         pendingEvolutionCount: 0,
         mode: "light",
         includeInternet: false,
@@ -601,8 +574,4 @@ export async function GET() {
     },
     timestamp: now(),
   });
-}
-
-function isSimpleMessage(message: string) {
-  throw new Error("Function not implemented.");
 }
