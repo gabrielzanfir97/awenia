@@ -75,27 +75,108 @@ export type IntentRouterAnalysis = {
   timestamp: string;
 };
 
+export type IntentRouterOptions = {
+  execute?: boolean;
+  onlyPrimary?: boolean;
+  skipApprovalRequired?: boolean;
+  approvedByGabi?: boolean;
+  approvedBy?: string;
+};
+
 function now() {
   return new Date().toISOString();
 }
 
-function normalizeMessage(message: string) {
-  return message.trim().replace(/\s+/g, " ");
+function normalizeMessage(message = "") {
+  return String(message).trim().replace(/\s+/g, " ");
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeRisk(risk: any) {
+  const value = String(risk || "").toLowerCase();
+
+  if (value === "low") return "low";
+  if (value === "medium") return "medium";
+  if (value === "high") return "high";
+  if (value === "critical") return "critical";
+
+  return "low";
 }
 
 function getPriority(intent: any) {
-  return Number(intent?.priority ?? intent?.score ?? 5);
+  return clampNumber(Number(intent?.priority ?? intent?.score ?? 5), 0, 10);
 }
 
 function getConfidence(intent: any) {
-  return Number(intent?.confidence ?? 0);
+  const raw = Number(intent?.confidence ?? 0);
+
+  if (!Number.isFinite(raw)) return 0;
+
+  if (raw > 1) {
+    return clampNumber(raw / 100, 0, 1);
+  }
+
+  return clampNumber(raw, 0, 1);
 }
 
 function getScore(intent: any) {
   const priority = getPriority(intent);
   const confidence = getConfidence(intent);
 
-  return confidence + priority * 5;
+  return priority * 10 + confidence * 10;
+}
+
+function getShouldAct(intent: any) {
+  return Boolean(
+    intent?.shouldAct ||
+    intent?.shouldCreate ||
+    intent?.shouldSave ||
+    intent?.shouldUpdate ||
+    intent?.shouldLearn ||
+    intent?.shouldRemember ||
+    intent?.shouldPlan ||
+    intent?.detected ||
+    intent?.status === "detected" ||
+    intent?.status === "needs_approval"
+  );
+}
+
+function getReason(intent: any) {
+  return (
+    intent?.reason ||
+    intent?.recommendation ||
+    intent?.message ||
+    "No reason provided"
+  );
+}
+
+function getRequiresApproval(intent: any) {
+  const risk = normalizeRisk(intent?.risk);
+
+  return Boolean(
+    intent?.requiresApproval ||
+    intent?.requires_approval ||
+    intent?.needsApproval ||
+    intent?.status === "needs_approval" ||
+    risk === "medium" ||
+    risk === "high" ||
+    risk === "critical"
+  );
+}
+
+function getBlocked(intent: any) {
+  const risk = normalizeRisk(intent?.risk);
+
+  return Boolean(
+    intent?.blocked ||
+    intent?.status === "blocked" ||
+    risk === "critical"
+  );
 }
 
 function buildCandidate(
@@ -104,13 +185,13 @@ function buildCandidate(
 ): IntentCandidate {
   return {
     name,
-    shouldAct: Boolean(intent?.shouldAct),
+    shouldAct: getShouldAct(intent),
     confidence: getConfidence(intent),
     priority: getPriority(intent),
     score: getScore(intent),
-    requiresApproval: Boolean(intent?.requiresApproval),
-    blocked: intent?.risk === "critical" || intent?.status === "blocked",
-    reason: intent?.reason || "No reason provided",
+    requiresApproval: getRequiresApproval(intent),
+    blocked: getBlocked(intent),
+    reason: getReason(intent),
     intent,
   };
 }
@@ -118,7 +199,8 @@ function buildCandidate(
 function sortCandidates(candidates: IntentCandidate[]) {
   return [...candidates].sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    return b.priority - a.priority;
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    return b.confidence - a.confidence;
   });
 }
 
@@ -145,34 +227,94 @@ function buildRecommendation(
   return "Detected intents can be processed safely.";
 }
 
+function safeAnalyze(
+  name: IntentName,
+  message: string,
+  source: IntentSource
+) {
+  try {
+    if (name === "learning") {
+      return analyzeLearningIntent(message, source);
+    }
+
+    if (name === "memory") {
+      return analyzeMemoryIntent(message, source);
+    }
+
+    if (name === "personality") {
+      return analyzePersonalityIntent(message, source);
+    }
+
+    if (name === "goal") {
+      return analyzeGoalIntent(message, source);
+    }
+
+    if (name === "evolution") {
+      return analyzeEvolutionIntent(message, source);
+    }
+
+    return {
+      shouldAct: false,
+      status: "not_detected",
+      reason: "Unknown intent analyzer",
+    };
+  } catch (error: any) {
+    return {
+      shouldAct: false,
+      status: "failed",
+      risk: "low",
+      reason: error?.message || `Failed to analyze ${name} intent`,
+    };
+  }
+}
+
 export function analyzeIntentRouter(
   message: string,
   source: IntentSource = "user"
 ): IntentRouterAnalysis {
   const cleanMessage = normalizeMessage(message);
 
-  const candidates = [
+  if (!cleanMessage) {
+    return {
+      status: "not_detected",
+      message: cleanMessage,
+      source,
+      detected: false,
+      primaryIntent: null,
+      candidates: [],
+      detectedCandidates: [],
+      recommendation: "Empty message. Reply normally.",
+      truthPolicy: {
+        noFakeIntentExecution: true,
+        noClaimSavedWithoutDatabaseWrite: true,
+        noHighRiskExecutionWithoutApproval: true,
+      },
+      timestamp: now(),
+    };
+  }
+
+  const candidates = sortCandidates([
     buildCandidate(
       "learning",
-      analyzeLearningIntent(cleanMessage, source)
+      safeAnalyze("learning", cleanMessage, source)
     ),
     buildCandidate(
       "memory",
-      analyzeMemoryIntent(cleanMessage, source)
+      safeAnalyze("memory", cleanMessage, source)
     ),
     buildCandidate(
       "personality",
-      analyzePersonalityIntent(cleanMessage, source)
+      safeAnalyze("personality", cleanMessage, source)
     ),
     buildCandidate(
       "goal",
-      analyzeGoalIntent(cleanMessage, source)
+      safeAnalyze("goal", cleanMessage, source)
     ),
     buildCandidate(
       "evolution",
-      analyzeEvolutionIntent(cleanMessage, source)
+      safeAnalyze("evolution", cleanMessage, source)
     ),
-  ];
+  ]);
 
   const detectedCandidates = sortCandidates(
     candidates.filter((candidate) => candidate.shouldAct)
@@ -203,7 +345,7 @@ export function analyzeIntentRouter(
 
     primaryIntent,
 
-    candidates: sortCandidates(candidates),
+    candidates,
 
     detectedCandidates,
 
@@ -222,12 +364,13 @@ export function analyzeIntentRouter(
 async function executeIntentCandidate(
   candidate: IntentCandidate,
   message: string,
-  source: IntentSource
+  source: IntentSource,
+  options: IntentRouterOptions
 ) {
   if (candidate.blocked) {
     return {
       name: candidate.name,
-      status: "blocked",
+      status: "blocked" as IntentRouterStatus,
       executed: false,
       reason: "Intent blocked by safety rules",
       intent: candidate.intent,
@@ -235,55 +378,87 @@ async function executeIntentCandidate(
     };
   }
 
+  if (candidate.requiresApproval && !options.approvedByGabi) {
+    return {
+      name: candidate.name,
+      status: "needs_approval" as IntentRouterStatus,
+      executed: false,
+      reason: "Intent requires Gabi approval before execution",
+      approvedByGabi: false,
+      intent: candidate.intent,
+      timestamp: now(),
+    };
+  }
+
   try {
     if (candidate.name === "learning") {
+      const result = await runLearningIntent(message, source);
+
       return {
         name: candidate.name,
+        status: "executed" as IntentRouterStatus,
         executed: true,
-        result: await runLearningIntent(message, source),
+        approvedBy: options.approvedBy || null,
+        result,
         timestamp: now(),
       };
     }
 
     if (candidate.name === "memory") {
+      const result = await runMemoryIntent(message, source);
+
       return {
         name: candidate.name,
+        status: "executed" as IntentRouterStatus,
         executed: true,
-        result: await runMemoryIntent(message, source),
+        approvedBy: options.approvedBy || null,
+        result,
         timestamp: now(),
       };
     }
 
     if (candidate.name === "personality") {
+      const result = await runPersonalityIntent(message, source);
+
       return {
         name: candidate.name,
+        status: "executed" as IntentRouterStatus,
         executed: true,
-        result: await runPersonalityIntent(message, source),
+        approvedBy: options.approvedBy || null,
+        result,
         timestamp: now(),
       };
     }
 
     if (candidate.name === "goal") {
+      const result = await runGoalIntent(message, source);
+
       return {
         name: candidate.name,
+        status: "executed" as IntentRouterStatus,
         executed: true,
-        result: await runGoalIntent(message, source),
+        approvedBy: options.approvedBy || null,
+        result,
         timestamp: now(),
       };
     }
 
     if (candidate.name === "evolution") {
+      const result = await runEvolutionIntent(message, source);
+
       return {
         name: candidate.name,
+        status: "executed" as IntentRouterStatus,
         executed: true,
-        result: await runEvolutionIntent(message, source),
+        approvedBy: options.approvedBy || null,
+        result,
         timestamp: now(),
       };
     }
 
     return {
       name: candidate.name,
-      status: "failed",
+      status: "failed" as IntentRouterStatus,
       executed: false,
       reason: "Unknown intent candidate",
       timestamp: now(),
@@ -291,7 +466,7 @@ async function executeIntentCandidate(
   } catch (error: any) {
     return {
       name: candidate.name,
-      status: "failed",
+      status: "failed" as IntentRouterStatus,
       executed: false,
       error: error?.message || "Unknown intent execution error",
       timestamp: now(),
@@ -299,20 +474,49 @@ async function executeIntentCandidate(
   }
 }
 
+function getFinalStatus(results: any[]): IntentRouterStatus {
+  const failed = results.filter((item) => item.status === "failed");
+  const blocked = results.filter((item) => item.status === "blocked");
+  const needsApproval = results.filter(
+    (item) => item.status === "needs_approval"
+  );
+  const executedResults = results.filter((item) => item.executed);
+
+  if (blocked.length > 0) return "blocked";
+
+  if (failed.length > 0 && executedResults.length > 0) {
+    return "partial";
+  }
+
+  if (failed.length > 0) return "failed";
+
+  if (needsApproval.length > 0 && executedResults.length === 0) {
+    return "needs_approval";
+  }
+
+  if (needsApproval.length > 0 && executedResults.length > 0) {
+    return "partial";
+  }
+
+  if (executedResults.length > 0) return "executed";
+
+  return "detected";
+}
+
 export async function runIntentRouter(
   message: string,
   source: IntentSource = "user",
-  options?: {
-    execute?: boolean;
-    onlyPrimary?: boolean;
-    skipApprovalRequired?: boolean;
-  }
+  options?: IntentRouterOptions
 ) {
   const startedAt = now();
 
-  const execute = options?.execute ?? true;
-  const onlyPrimary = options?.onlyPrimary ?? false;
-  const skipApprovalRequired = options?.skipApprovalRequired ?? true;
+  const safeOptions: IntentRouterOptions = {
+    execute: options?.execute ?? false,
+    onlyPrimary: options?.onlyPrimary ?? true,
+    skipApprovalRequired: options?.skipApprovalRequired ?? true,
+    approvedByGabi: options?.approvedByGabi ?? false,
+    approvedBy: options?.approvedBy || "Gabi",
+  };
 
   const analysis = analyzeIntentRouter(message, source);
 
@@ -326,37 +530,47 @@ export async function runIntentRouter(
         startedAt,
         completedAt: now(),
       },
+      truthPolicy: analysis.truthPolicy,
       timestamp: now(),
     };
   }
 
-  if (!execute) {
+  if (!safeOptions.execute) {
     return {
-      status: "detected" as IntentRouterStatus,
+      status: analysis.status,
       analysis,
       executed: false,
       results: [],
+      reason:
+        "Intent router analyzed the message only. Execution is disabled by default.",
       execution: {
         startedAt,
         completedAt: now(),
       },
+      truthPolicy: analysis.truthPolicy,
       timestamp: now(),
     };
   }
 
-  const candidatesToRun = onlyPrimary && analysis.primaryIntent
-    ? [analysis.primaryIntent]
-    : analysis.detectedCandidates;
+  const candidatesToRun =
+    safeOptions.onlyPrimary && analysis.primaryIntent
+      ? [analysis.primaryIntent]
+      : analysis.detectedCandidates;
 
   const results = [];
 
   for (const candidate of candidatesToRun) {
-    if (skipApprovalRequired && candidate.requiresApproval) {
+    if (
+      safeOptions.skipApprovalRequired &&
+      candidate.requiresApproval &&
+      !safeOptions.approvedByGabi
+    ) {
       results.push({
         name: candidate.name,
-        status: "needs_approval",
+        status: "needs_approval" as IntentRouterStatus,
         executed: false,
         reason: "Skipped because this intent requires Gabi approval",
+        approvedByGabi: false,
         intent: candidate.intent,
         timestamp: now(),
       });
@@ -365,29 +579,17 @@ export async function runIntentRouter(
     }
 
     results.push(
-      await executeIntentCandidate(candidate, message, source)
+      await executeIntentCandidate(
+        candidate,
+        analysis.message,
+        source,
+        safeOptions
+      )
     );
   }
 
-  const failed = results.filter((item: any) => item.status === "failed");
-  const blocked = results.filter((item: any) => item.status === "blocked");
-  const needsApproval = results.filter(
-    (item: any) => item.status === "needs_approval"
-  );
+  const status = getFinalStatus(results);
   const executedResults = results.filter((item: any) => item.executed);
-
-  const status: IntentRouterStatus =
-    blocked.length > 0
-      ? "blocked"
-      : failed.length > 0 && executedResults.length > 0
-        ? "partial"
-        : failed.length > 0
-          ? "failed"
-          : needsApproval.length > 0 && executedResults.length === 0
-            ? "needs_approval"
-            : executedResults.length > 0
-              ? "executed"
-              : "detected";
 
   return {
     status,
@@ -403,8 +605,28 @@ export async function runIntentRouter(
       completedAt: now(),
     },
 
+    truthPolicy: analysis.truthPolicy,
+
     timestamp: now(),
   };
+}
+
+function safeBuildPlan(name: IntentName, message: string) {
+  try {
+    if (name === "learning") return buildLearningPlan(message);
+    if (name === "memory") return buildMemoryIntentPlan(message);
+    if (name === "personality") return buildPersonalityPlan(message);
+    if (name === "goal") return buildGoalIntentPlan(message);
+    if (name === "evolution") return buildEvolutionIntentPlan(message);
+
+    return null;
+  } catch (error: any) {
+    return {
+      status: "failed",
+      reason: error?.message || `Failed to build ${name} plan`,
+      timestamp: now(),
+    };
+  }
 }
 
 export function buildIntentRouterPlan(message: string) {
@@ -414,23 +636,26 @@ export function buildIntentRouterPlan(message: string) {
     analysis,
 
     plans: {
-      learning: buildLearningPlan(message),
-      memory: buildMemoryIntentPlan(message),
-      personality: buildPersonalityPlan(message),
-      goal: buildGoalIntentPlan(message),
-      evolution: buildEvolutionIntentPlan(message),
+      learning: safeBuildPlan("learning", message),
+      memory: safeBuildPlan("memory", message),
+      personality: safeBuildPlan("personality", message),
+      goal: safeBuildPlan("goal", message),
+      evolution: safeBuildPlan("evolution", message),
     },
 
     routing: {
       primaryIntent: analysis.primaryIntent?.name || null,
       detectedCount: analysis.detectedCandidates.length,
       recommendation: analysis.recommendation,
+      executeDefault: false,
+      onlyPrimaryDefault: true,
     },
 
     truthPolicy: {
       noFakeIntentExecution: true,
       noClaimSavedWithoutDatabaseWrite: true,
       approvalRequiredForRiskyEvolution: true,
+      executionDisabledByDefault: true,
     },
 
     timestamp: now(),
@@ -450,17 +675,25 @@ export function getDetectedIntents(message: string) {
 }
 
 export async function routeIntent(message: string) {
-  return runIntentRouter(message);
+  return runIntentRouter(message, "user", {
+    execute: false,
+  });
 }
 
 export async function routeUserIntent(message: string) {
-  return runIntentRouter(message, "user");
+  return runIntentRouter(message, "user", {
+    execute: false,
+  });
 }
 
 export async function handleIntentRouter(message: string) {
-  return runIntentRouter(message, "user");
+  return runIntentRouter(message, "user", {
+    execute: false,
+  });
 }
 
 export async function handleIntentRouting(message: string) {
-  return runIntentRouter(message, "user");
+  return runIntentRouter(message, "user", {
+    execute: false,
+  });
 }
