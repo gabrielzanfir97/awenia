@@ -72,25 +72,223 @@ export type RouteDecision = {
   timestamp: string;
 };
 
-const TOOL_COMMAND_PREFIXES = [
-  "LIST_FILES",
-  "READ_FILE:",
-  "READ_REAL_FILE:",
-  "ANALYZE_REAL_FILE:",
-  "WRITE_FILE:",
-  "PATCH_FILE:",
-  "EXECUTE_WRITE:",
-  "EXECUTE_PATCH:",
-  "ROLLBACK_FILE:",
-  "EXECUTE_ROLLBACK:",
-  "SEARCH_CODE:",
-  "SEARCH_INSIDE_FILE:",
-  "CHECK_AWENIA_STATUS",
-  "RUN_AUTONOMOUS_TESTS",
-  "RUN_BACKGROUND_WORKER",
-  "DEBUG_ERROR:",
-  "TASK_PLAN:",
-  "CHECK_INTERNET_SYSTEM",
+type SecurityActionName =
+  | "read"
+  | "patch"
+  | "execute"
+  | "evolution"
+  | "system_change";
+
+type ToolCommandKind =
+  | "status"
+  | "read"
+  | "analyze"
+  | "search"
+  | "write"
+  | "patch"
+  | "rollback"
+  | "debug"
+  | "planning"
+  | "background";
+
+type ToolCommandDefinition = {
+  prefix: string;
+  kind: ToolCommandKind;
+  risk: RouteRisk;
+  requiresApproval: boolean;
+  securityAction: SecurityActionName;
+  description: string;
+};
+
+type ToolCommandMatch = ToolCommandDefinition & {
+  matchedPrefix: string;
+};
+
+const TOOL_COMMANDS: ToolCommandDefinition[] = [
+  {
+    prefix: "LIST_FILES",
+    kind: "read",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "List project files",
+  },
+  {
+    prefix: "READ_FILE:",
+    kind: "read",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Read remembered or virtual file",
+  },
+  {
+    prefix: "READ_REAL_FILE:",
+    kind: "read",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Read real project file",
+  },
+  {
+    prefix: "ANALYZE_REAL_FILE:",
+    kind: "analyze",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Analyze real project file",
+  },
+  {
+    prefix: "SEARCH_CODE:",
+    kind: "search",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Search code memory",
+  },
+  {
+    prefix: "SEARCH_INSIDE_FILE:",
+    kind: "search",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Search inside file",
+  },
+  {
+    prefix: "CHECK_AWENIA_STATUS",
+    kind: "status",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Check Awenia status",
+  },
+  {
+    prefix: "CHECK_PROJECT_STATE",
+    kind: "status",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Check project state",
+  },
+  {
+    prefix: "CHECK_MEMORY_SYSTEM",
+    kind: "status",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Check memory system",
+  },
+  {
+    prefix: "CHECK_SUPABASE_SYSTEM",
+    kind: "status",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Check Supabase system",
+  },
+  {
+    prefix: "CHECK_INTERNET_SYSTEM",
+    kind: "status",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Check internet system",
+  },
+  {
+    prefix: "RUN_AUTONOMOUS_TESTS",
+    kind: "status",
+    risk: "medium",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Run autonomous tests",
+  },
+  {
+    prefix: "DEBUG_ERROR:",
+    kind: "debug",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Analyze error text",
+  },
+  {
+    prefix: "TASK_PLAN:",
+    kind: "planning",
+    risk: "low",
+    requiresApproval: false,
+    securityAction: "read",
+    description: "Create task plan",
+  },
+  {
+    prefix: "WRITE_FILE:",
+    kind: "write",
+    risk: "medium",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Prepare file write",
+  },
+  {
+    prefix: "PATCH_FILE:",
+    kind: "patch",
+    risk: "medium",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Prepare file patch",
+  },
+  {
+    prefix: "EXECUTE_WRITE:",
+    kind: "write",
+    risk: "high",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Execute approved file write",
+  },
+  {
+    prefix: "EXECUTE_WRITE_FILE:",
+    kind: "write",
+    risk: "high",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Execute approved file write",
+  },
+  {
+    prefix: "EXECUTE_PATCH:",
+    kind: "patch",
+    risk: "high",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Execute approved file patch",
+  },
+  {
+    prefix: "EXECUTE_PATCH_FILE:",
+    kind: "patch",
+    risk: "high",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Execute approved file patch",
+  },
+  {
+    prefix: "ROLLBACK_FILE:",
+    kind: "rollback",
+    risk: "high",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Prepare rollback",
+  },
+  {
+    prefix: "EXECUTE_ROLLBACK:",
+    kind: "rollback",
+    risk: "high",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Execute approved rollback",
+  },
+  {
+    prefix: "RUN_BACKGROUND_WORKER",
+    kind: "background",
+    risk: "medium",
+    requiresApproval: true,
+    securityAction: "execute",
+    description: "Run background worker",
+  },
 ];
 
 const SIMPLE_GREETINGS = [
@@ -103,16 +301,38 @@ const SIMPLE_GREETINGS = [
   "hey",
 ];
 
+const CRITICAL_PATH_MARKERS = [
+  ".env",
+  ".env.local",
+  ".git",
+  "node_modules",
+  "app/protected-core.ts",
+];
+
+const HIGH_RISK_PATH_MARKERS = [
+  "app/api/awenia/route.ts",
+  "app/api/",
+  "app/memory-store.ts",
+  "app/supabase.ts",
+  "app/security.ts",
+  "app/pending-actions.ts",
+  "app/dev-agent.ts",
+];
+
 function now() {
   return new Date().toISOString();
 }
 
-function normalize(text: string) {
-  return text.toLowerCase().trim().replace(/\s+/g, " ");
+function normalize(text = "") {
+  return String(text).toLowerCase().trim().replace(/\s+/g, " ");
 }
 
-function upperTrim(text: string) {
-  return text.trim().toUpperCase();
+function normalizePath(text = "") {
+  return String(text).replace(/\\/g, "/").trim();
+}
+
+function upperTrim(text = "") {
+  return String(text).trim().toUpperCase();
 }
 
 function isSimpleGreeting(message: string) {
@@ -125,6 +345,7 @@ function isSimpleShortMessage(message: string) {
   const clean = normalize(message);
 
   return (
+    clean.length > 0 &&
     clean.length <= 20 &&
     !clean.includes(":") &&
     !clean.includes("cod") &&
@@ -133,19 +354,51 @@ function isSimpleShortMessage(message: string) {
     !clean.includes("error") &&
     !clean.includes("awenia") &&
     !clean.includes("internet") &&
-    !clean.includes("memorie")
+    !clean.includes("memorie") &&
+    !clean.includes("memory") &&
+    !clean.includes("supabase") &&
+    !clean.includes("status") &&
+    !clean.includes("check")
   );
 }
 
-function detectCommand(message: string) {
-  const trimmed = message.trim();
-  const upper = upperTrim(trimmed);
+function matchesCommandPrefix(upperMessage: string, prefix: string) {
+  const upperPrefix = prefix.toUpperCase();
 
-  const command = TOOL_COMMAND_PREFIXES.find((prefix) =>
-    upper.startsWith(prefix)
+  return upperMessage.startsWith(upperPrefix);
+}
+
+function detectCommandDefinition(message: string): ToolCommandMatch | null {
+  const upper = upperTrim(message);
+
+  const exactMatch = TOOL_COMMANDS.find((command) =>
+    matchesCommandPrefix(upper, command.prefix)
   );
 
-  return command || null;
+  if (exactMatch) {
+    return {
+      ...exactMatch,
+      matchedPrefix: exactMatch.prefix,
+    };
+  }
+
+  if (upper.startsWith("CHECK_")) {
+    return {
+      prefix: "CHECK_",
+      matchedPrefix: "CHECK_",
+      kind: "status",
+      risk: "low",
+      requiresApproval: false,
+      securityAction: "read",
+      description: "Generic status check command",
+    };
+  }
+
+  return null;
+}
+
+function detectCommand(message: string) {
+  return detectCommandDefinition(message)?.matchedPrefix || null;
 }
 
 function mapSkillToRoute(skill: SkillName): RouteName {
@@ -176,50 +429,67 @@ function mapIntentToRoute(intentName?: string): RouteName | null {
   return null;
 }
 
-function detectRouteRisk(route: RouteName, message: string): RouteRisk {
-  const lower = normalize(message);
+function includesAnyMarker(message: string, markers: string[]) {
+  const normalized = normalizePath(message).toLowerCase();
 
-  if (
-    lower.includes(".env") ||
-    lower.includes("secret") ||
-    lower.includes("delete") ||
-    lower.includes("șterge") ||
-    lower.includes("sterge") ||
-    lower.includes(".git") ||
-    lower.includes("node_modules")
-  ) {
+  return markers.some((marker) =>
+    normalized.includes(normalizePath(marker).toLowerCase())
+  );
+}
+
+function maxRisk(a: RouteRisk, b: RouteRisk): RouteRisk {
+  const order: Record<RouteRisk, number> = {
+    low: 1,
+    medium: 2,
+    high: 3,
+    critical: 4,
+  };
+
+  return order[b] > order[a] ? b : a;
+}
+
+function detectRouteRisk(
+  route: RouteName,
+  message: string,
+  commandMatch?: ToolCommandMatch | null
+): RouteRisk {
+  let risk: RouteRisk = commandMatch?.risk || "low";
+
+  if (includesAnyMarker(message, CRITICAL_PATH_MARKERS)) {
     return "critical";
   }
 
-  if (
-    lower.includes("app/api/awenia/route.ts") ||
-    lower.includes("memory-store.ts") ||
-    lower.includes("supabase.ts") ||
-    lower.includes("security.ts") ||
-    lower.includes("protected-core.ts")
-  ) {
-    return "high";
+  if (includesAnyMarker(message, HIGH_RISK_PATH_MARKERS)) {
+    risk = maxRisk(risk, "high");
   }
 
   if (
-    route === "tool_command" ||
-    route === "code" ||
-    route === "debug" ||
-    route === "evolution" ||
-    route === "security"
+    !commandMatch &&
+    (route === "code" ||
+      route === "debug" ||
+      route === "evolution" ||
+      route === "security")
   ) {
-    return "medium";
+    risk = maxRisk(risk, "medium");
   }
 
-  return "low";
+  return risk;
 }
 
-function routeRequiresApproval(route: RouteName, risk: RouteRisk) {
+function routeRequiresApproval(
+  route: RouteName,
+  risk: RouteRisk,
+  commandMatch?: ToolCommandMatch | null
+) {
   if (risk === "critical") return true;
+
+  if (commandMatch) {
+    return commandMatch.requiresApproval;
+  }
+
   if (risk === "high") return true;
   if (risk === "medium") return true;
 
-  if (route === "tool_command") return true;
   if (route === "code") return true;
   if (route === "debug") return true;
   if (route === "evolution") return true;
@@ -271,10 +541,19 @@ function shouldRunCognition(route: RouteName, message: string) {
 function buildRecommendation(
   route: RouteName,
   risk: RouteRisk,
-  requiresApproval: boolean
+  requiresApproval: boolean,
+  commandMatch?: ToolCommandMatch | null
 ) {
   if (route === "blocked" || risk === "critical") {
     return "Nu executa. Acțiunea este blocată sau critică.";
+  }
+
+  if (commandMatch && !requiresApproval) {
+    return `Execută doar handlerul verificat pentru comandă: ${commandMatch.description}.`;
+  }
+
+  if (commandMatch && requiresApproval) {
+    return `Pregătește acțiunea, dar execuția cere aprobarea lui Gabi: ${commandMatch.description}.`;
   }
 
   if (requiresApproval) {
@@ -285,19 +564,63 @@ function buildRecommendation(
     return "Răspunde direct, fără AI greu și fără cognition runtime.";
   }
 
-  if (route === "tool_command") {
-    return "Execută doar handlerul verificat pentru comandă.";
-  }
-
   return "Continuă pe ruta detectată.";
 }
 
+function buildDefaultIntent(cleanMessage: string) {
+  return {
+    status: "not_detected",
+    message: cleanMessage,
+    source: "user",
+    detected: false,
+    primaryIntent: null,
+    candidates: [],
+    detectedCandidates: [],
+    recommendation: "Intent router was skipped for this route.",
+    truthPolicy: {
+      noFakeIntentExecution: true,
+      noClaimSavedWithoutDatabaseWrite: true,
+      noHighRiskExecutionWithoutApproval: true,
+    },
+    timestamp: now(),
+  };
+}
+
+function getSecurityAction(
+  route: RouteName,
+  commandMatch?: ToolCommandMatch | null
+): SecurityActionName {
+  if (commandMatch) return commandMatch.securityAction;
+
+  if (route === "code") return "patch";
+  if (route === "evolution") return "evolution";
+  if (route === "security") return "system_change";
+
+  return "read";
+}
+
+function shouldAnalyzeIntentForRoute(
+  cleanMessage: string,
+  commandMatch: ToolCommandMatch | null
+) {
+  if (!cleanMessage) return false;
+  if (commandMatch) return false;
+  if (isSimpleGreeting(cleanMessage)) return false;
+  if (isSimpleShortMessage(cleanMessage)) return false;
+
+  return true;
+}
+
 export function analyzeRouting(message: string): RouteDecision {
-  const cleanMessage = message.trim();
-  const command = detectCommand(cleanMessage);
+  const cleanMessage = String(message || "").trim();
+  const commandMatch = detectCommandDefinition(cleanMessage);
+  const command = commandMatch?.matchedPrefix || null;
 
   const skill = detectSkillFromMessage(cleanMessage);
-  const intent = analyzeIntentRouter(cleanMessage, "user");
+
+  const intent = shouldAnalyzeIntentForRoute(cleanMessage, commandMatch)
+    ? analyzeIntentRouter(cleanMessage, "user")
+    : buildDefaultIntent(cleanMessage);
 
   const intentRoute = mapIntentToRoute(
     intent.primaryIntent?.name
@@ -308,13 +631,16 @@ export function analyzeRouting(message: string): RouteDecision {
 
   if (!cleanMessage) {
     route = "simple_reply";
-    reason = "Empty or simple message";
+    reason = "Empty message detected";
+  } else if (commandMatch) {
+    route = "tool_command";
+    reason = `Tool command detected: ${commandMatch.matchedPrefix}`;
   } else if (isSimpleGreeting(cleanMessage)) {
     route = "simple_reply";
     reason = "Simple greeting detected";
-  } else if (command) {
-    route = "tool_command";
-    reason = `Tool command detected: ${command}`;
+  } else if (isSimpleShortMessage(cleanMessage)) {
+    route = "simple_reply";
+    reason = "Simple short message detected";
   } else if (intentRoute) {
     route = intentRoute;
     reason = `Intent route detected: ${intentRoute}`;
@@ -323,28 +649,24 @@ export function analyzeRouting(message: string): RouteDecision {
     reason = `Skill route detected: ${skill.skill}`;
   }
 
-  const risk = detectRouteRisk(route, cleanMessage);
-  const requiresApprovalValue = routeRequiresApproval(route, risk);
+  const risk = detectRouteRisk(route, cleanMessage, commandMatch);
+  const requiresApprovalValue = routeRequiresApproval(
+    route,
+    risk,
+    commandMatch
+  );
+
+  const securityAction = getSecurityAction(route, commandMatch);
 
   const security = validateSecurityAction({
-    action:
-      route === "tool_command"
-        ? "execute"
-        : route === "code"
-          ? "patch"
-          : route === "evolution"
-            ? "evolution"
-            : route === "security"
-              ? "system_change"
-              : "read",
+    action: securityAction,
     content: cleanMessage,
     approvedByGabi: false,
     verified: true,
-    reason: "Routing safety check",
+    reason: `Routing safety check for ${route}`,
   });
 
   const blocked = risk === "critical" || security.blocked;
-
   const finalRoute: RouteName = blocked ? "blocked" : route;
 
   const status: RouteStatus = blocked
@@ -376,7 +698,8 @@ export function analyzeRouting(message: string): RouteDecision {
     recommendation: buildRecommendation(
       finalRoute,
       risk,
-      requiresApprovalValue
+      requiresApprovalValue,
+      commandMatch
     ),
     truthPolicy: {
       noFakeRouting: true,
@@ -386,6 +709,51 @@ export function analyzeRouting(message: string): RouteDecision {
     },
     timestamp: now(),
   };
+}
+
+async function safeSaveRoutingReflection(route: RouteDecision) {
+  try {
+    const reflection = await createAutonomousReflection(
+      `Routing decision: ${route.route}`,
+      `Risk: ${route.risk}. Approval: ${route.requiresApproval}. Reason: ${route.reason}`,
+      route.recommendation
+    );
+
+    let suggestion: any = null;
+
+    if (route.requiresApproval) {
+      suggestion = await createEvolutionSuggestion(
+        `Routing needs approval: ${route.route}`,
+        `Route ${route.route} was detected with risk ${route.risk}.`,
+        7
+      );
+    }
+
+    return {
+      status: "saved",
+      reflection,
+      suggestion,
+      timestamp: now(),
+    };
+  } catch (error: any) {
+    return {
+      status: "failed",
+      error: error?.message || "Failed to save routing reflection",
+      timestamp: now(),
+    };
+  }
+}
+
+async function safeCreateTaskPlan(message: string) {
+  try {
+    return await createTaskPlan(message);
+  } catch (error: any) {
+    return {
+      status: "failed",
+      error: error?.message || "Failed to create task plan",
+      timestamp: now(),
+    };
+  }
 }
 
 export async function runRouting(
@@ -404,9 +772,18 @@ export async function runRouting(
   let skillState: any = null;
   let intentResult: any = null;
   let taskPlan: any = null;
+  let reflectionResult: any = null;
 
   try {
-    if (options?.runSkill ?? true) {
+    const shouldRunSkillSystem =
+      options?.runSkill ??
+      (
+        route.route !== "simple_reply" &&
+        route.route !== "tool_command" &&
+        route.route !== "blocked"
+      );
+
+    if (shouldRunSkillSystem) {
       skillState = await runSkillSystem(message);
     }
 
@@ -421,27 +798,20 @@ export async function runRouting(
       });
     }
 
-    if (options?.createPlan && route.route !== "simple_reply") {
-      taskPlan = await createTaskPlan(message);
+    if (
+      options?.createPlan &&
+      route.route !== "simple_reply" &&
+      route.route !== "tool_command" &&
+      route.route !== "blocked"
+    ) {
+      taskPlan = await safeCreateTaskPlan(message);
     }
 
     if (
       (options?.saveReflection ?? false) &&
       route.route !== "simple_reply"
     ) {
-      await createAutonomousReflection(
-        `Routing decision: ${route.route}`,
-        `Risk: ${route.risk}. Approval: ${route.requiresApproval}. Reason: ${route.reason}`,
-        route.recommendation
-      );
-
-      if (route.requiresApproval) {
-        await createEvolutionSuggestion(
-          `Routing needs approval: ${route.route}`,
-          `Route ${route.route} was detected with risk ${route.risk}.`,
-          7
-        );
-      }
+      reflectionResult = await safeSaveRoutingReflection(route);
     }
 
     return {
@@ -450,6 +820,7 @@ export async function runRouting(
       skillState,
       intentResult,
       taskPlan,
+      reflectionResult,
       execution: {
         startedAt,
         completedAt: now(),
@@ -463,6 +834,7 @@ export async function runRouting(
       skillState,
       intentResult,
       taskPlan,
+      reflectionResult,
       error: error?.message || "Unknown routing error",
       execution: {
         startedAt,
@@ -486,6 +858,7 @@ export function buildRoutingContext(message: string) {
       `Risk: ${route.risk}`,
       `Requires approval: ${route.requiresApproval}`,
       `Use AI: ${route.shouldUseAI}`,
+      `Run tools: ${route.shouldRunTools}`,
       `Run cognition: ${route.shouldRunCognition}`,
       `Instruction: ${route.recommendation}`,
     ].join("\n"),
