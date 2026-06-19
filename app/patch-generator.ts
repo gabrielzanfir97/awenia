@@ -18,6 +18,14 @@ export type PatchStatus =
   | "blocked"
   | "failed";
 
+export type PatchValidation = {
+  valid: boolean;
+  canApply: boolean;
+  reasons: string[];
+  matches: number;
+  changesLineCount: number;
+};
+
 export type SearchReplacePatch = {
   filePath: string;
   searchText: string;
@@ -32,20 +40,24 @@ export type SearchReplacePatch = {
   timestamp: string;
 };
 
-export type PatchValidation = {
-  valid: boolean;
-  canApply: boolean;
-  reasons: string[];
-  matches: number;
-  changesLineCount: number;
-};
-
 function now() {
   return new Date().toISOString();
 }
 
-function normalizeText(text: string) {
-  return text.replace(/\r\n/g, "\n").trim();
+function normalizePath(filePath = "") {
+  return String(filePath)
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .trim();
+}
+
+function normalizeLineEndings(text = "") {
+  return String(text).replace(/\r\n/g, "\n");
+}
+
+function trimOuterBlankLines(text = "") {
+  return normalizeLineEndings(text).replace(/^\n+|\n+$/g, "");
 }
 
 function escapeRegExp(text: string) {
@@ -56,11 +68,18 @@ function countMatches(content: string, searchText: string) {
   if (!searchText) return 0;
 
   const regex = new RegExp(escapeRegExp(searchText), "g");
+
   return (content.match(regex) || []).length;
 }
 
-function detectPatchRisk(filePath: string, searchText: string, replacementText: string): PatchRisk {
-  const normalized = filePath.toLowerCase();
+function detectPatchRisk(
+  filePath: string,
+  searchText: string,
+  replacementText: string
+): PatchRisk {
+  const normalized = normalizePath(filePath).toLowerCase();
+  const replacementLower = replacementText.toLowerCase();
+  const searchLower = searchText.toLowerCase();
 
   if (
     normalized.includes(".env") ||
@@ -77,18 +96,20 @@ function detectPatchRisk(filePath: string, searchText: string, replacementText: 
     normalized.includes("memory-store.ts") ||
     normalized.includes("supabase.ts") ||
     normalized.includes("dev-agent.ts") ||
-    normalized.includes("pending-actions.ts")
+    normalized.includes("pending-actions.ts") ||
+    normalized.includes("security.ts")
   ) {
     return "high";
   }
 
-  const replacementLower = replacementText.toLowerCase();
-
   if (
     replacementLower.includes("process.env") ||
-    replacementLower.includes("delete") ||
+    replacementLower.includes("service_role") ||
+    replacementLower.includes("secret") ||
     replacementLower.includes("rm -rf") ||
-    replacementLower.includes("exec(")
+    replacementLower.includes("exec(") ||
+    replacementLower.includes("child_process") ||
+    searchLower.includes(".env")
   ) {
     return "high";
   }
@@ -117,9 +138,12 @@ export function validateSearchReplacePatch(input: {
 }): PatchValidation {
   const reasons: string[] = [];
 
-  const searchText = normalizeText(input.searchText || "");
-  const replacementText = normalizeText(input.replacementText || "");
-  const currentContent = input.currentContent;
+  const searchText = trimOuterBlankLines(input.searchText || "");
+  const replacementText = trimOuterBlankLines(input.replacementText || "");
+  const currentContent =
+    input.currentContent === undefined
+      ? undefined
+      : normalizeLineEndings(input.currentContent);
 
   if (!searchText) {
     reasons.push("Missing searchText");
@@ -129,7 +153,7 @@ export function validateSearchReplacePatch(input: {
     reasons.push("Missing replacementText");
   }
 
-  if (searchText === replacementText) {
+  if (searchText && replacementText && searchText === replacementText) {
     reasons.push("Search text and replacement text are identical");
   }
 
@@ -155,7 +179,7 @@ export function validateSearchReplacePatch(input: {
     canApply:
       reasons.length === 0 &&
       (currentContent === undefined || matches === 1),
-    reasons,
+    reasons: Array.from(new Set(reasons)),
     matches,
     changesLineCount,
   };
@@ -168,9 +192,9 @@ export function createSearchReplacePatch(input: {
   reason?: string;
   currentContent?: string;
 }): SearchReplacePatch {
-  const filePath = input.filePath.trim();
-  const searchText = normalizeText(input.searchText);
-  const replacementText = normalizeText(input.replacementText);
+  const filePath = normalizePath(input.filePath);
+  const searchText = trimOuterBlankLines(input.searchText);
+  const replacementText = trimOuterBlankLines(input.replacementText);
 
   const validation = validateSearchReplacePatch({
     currentContent: input.currentContent,
@@ -189,7 +213,7 @@ export function createSearchReplacePatch(input: {
     ? risk === "high"
       ? 70
       : 85
-    : 30;
+    : 20;
 
   return {
     filePath,
@@ -210,8 +234,10 @@ export function applyPatchToContent(
   currentContent: string,
   patch: SearchReplacePatch
 ) {
+  const normalizedContent = normalizeLineEndings(currentContent);
+
   const validation = validateSearchReplacePatch({
-    currentContent,
+    currentContent: normalizedContent,
     searchText: patch.searchText,
     replacementText: patch.replacementText,
   });
@@ -227,7 +253,7 @@ export function applyPatchToContent(
 
   return {
     success: true,
-    content: currentContent.replace(
+    content: normalizedContent.replace(
       patch.searchText,
       patch.replacementText
     ),
@@ -244,25 +270,30 @@ export async function generatePatchForFile(input: {
   saveAsPending?: boolean;
 }) {
   const startedAt = now();
+  const filePath = normalizePath(input.filePath);
 
   try {
-    const pathValidation = validateProjectFilePath(input.filePath, "patch");
+    const pathValidation = validateProjectFilePath(filePath, "patch");
 
     if (!pathValidation.allowed) {
       return {
         status: "blocked" as PatchStatus,
-        filePath: input.filePath,
+        filePath,
         reason: pathValidation.reason,
         pathValidation,
+        execution: {
+          startedAt,
+          completedAt: now(),
+        },
         timestamp: now(),
       };
     }
 
-    const currentContent = await readProjectFile(input.filePath);
-    const safety = await analyzeProjectFileSafety(input.filePath);
+    const currentContent = await readProjectFile(filePath);
+    const safety = await analyzeProjectFileSafety(filePath);
 
     const patch = createSearchReplacePatch({
-      filePath: input.filePath,
+      filePath,
       searchText: input.searchText,
       replacementText: input.replacementText,
       reason: input.reason,
@@ -271,30 +302,52 @@ export async function generatePatchForFile(input: {
 
     const risk = analyzePendingActionRisk({
       action_type: "PATCH_FILE",
-      file_path: input.filePath,
+      file_path: filePath,
       patch: patch.patchText,
       reason: patch.reason,
       source: "patch-generator",
+      requires_approval: true,
     });
+
+    const preview = applyPatchToContent(currentContent, patch);
+
+    const blocked =
+      patch.blocked ||
+      risk.blocked ||
+      patch.risk === "critical" ||
+      risk.risk === "critical";
+
+    const canSavePending =
+      Boolean(input.saveAsPending) &&
+      !blocked &&
+      patch.validation.valid &&
+      patch.validation.canApply &&
+      preview.success;
 
     let pendingAction = null;
 
-    if (input.saveAsPending && !risk.blocked) {
+    if (canSavePending) {
       pendingAction = await createPendingPatchAction(
-        input.filePath,
+        filePath,
         patch.patchText,
         patch.reason
       );
     }
 
-    return {
-      status: risk.blocked
-        ? "blocked"
-        : patch.requiresApproval
+    const status: PatchStatus = blocked
+      ? "blocked"
+      : !patch.validation.valid || !patch.validation.canApply || !preview.success
+        ? "needs_attention"
+        : canSavePending
           ? "pending_approval"
-          : "ready",
+          : patch.requiresApproval
+            ? "ready"
+            : "ready";
 
-      filePath: input.filePath,
+    return {
+      status,
+
+      filePath,
 
       patch,
 
@@ -304,7 +357,21 @@ export async function generatePatchForFile(input: {
 
       pendingAction,
 
-      preview: applyPatchToContent(currentContent, patch),
+      preview,
+
+      savePolicy: {
+        requestedSaveAsPending: Boolean(input.saveAsPending),
+        savedAsPending: Boolean(pendingAction),
+        saveBlockedBecauseInvalid:
+          Boolean(input.saveAsPending) && !canSavePending,
+        pendingActionsRequireApproval: true,
+      },
+
+      truthPolicy: {
+        noFileChanged: true,
+        noPendingActionForInvalidPatch: true,
+        patchValidatedAgainstRealFile: true,
+      },
 
       execution: {
         startedAt,
@@ -316,7 +383,7 @@ export async function generatePatchForFile(input: {
   } catch (error: any) {
     return {
       status: "failed" as PatchStatus,
-      filePath: input.filePath,
+      filePath,
       error: error?.message || "Unknown patch generation error",
       execution: {
         startedAt,
@@ -328,12 +395,14 @@ export async function generatePatchForFile(input: {
 }
 
 export function parseSearchReplacePatch(patchText: string) {
-  const searchMatch = patchText.match(/SEARCH:\s*([\s\S]*?)\s*REPLACE:/i);
-  const replaceMatch = patchText.match(/REPLACE:\s*([\s\S]*)/i);
+  const normalized = normalizeLineEndings(patchText || "");
+
+  const searchMatch = normalized.match(/SEARCH:\s*([\s\S]*?)\s*REPLACE:/i);
+  const replaceMatch = normalized.match(/REPLACE:\s*([\s\S]*)/i);
 
   return {
-    searchText: normalizeText(searchMatch?.[1] || ""),
-    replacementText: normalizeText(replaceMatch?.[1] || ""),
+    searchText: trimOuterBlankLines(searchMatch?.[1] || ""),
+    replacementText: trimOuterBlankLines(replaceMatch?.[1] || ""),
   };
 }
 
@@ -356,8 +425,8 @@ export function createPatchPlan(input: {
   currentPreview?: string;
 }) {
   return {
-    status: "needs_attention",
-    filePath: input.filePath,
+    status: "needs_attention" as PatchStatus,
+    filePath: normalizePath(input.filePath),
     request: input.request,
     currentPreview: input.currentPreview || "",
     requiredFormat: {
@@ -366,6 +435,11 @@ export function createPatchPlan(input: {
     },
     instruction:
       "Use verified current file content. Choose one exact SEARCH block and one REPLACE block. Do not guess file content.",
+    truthPolicy: {
+      noFileChanged: true,
+      needsExactSearchBlock: true,
+      noGuessingFileContent: true,
+    },
     timestamp: now(),
   };
 }
