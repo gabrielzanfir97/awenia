@@ -21,6 +21,13 @@ export type RollbackBackupInfo = {
   modifiedAt: string;
 };
 
+export type RollbackApprovalOptions = {
+  approvedByGabi?: boolean;
+  approvedBy?: string;
+  pendingActionId?: string;
+  reason?: string;
+};
+
 const PROJECT_ROOT = process.cwd();
 
 const BLOCKED_PATHS = [
@@ -45,26 +52,55 @@ function now() {
   return new Date().toISOString();
 }
 
-function normalizeProjectPath(filePath: string) {
-  return filePath.replace(/\\/g, "/").trim().replace(/^\/+/, "");
+function normalizeProjectPath(filePath = "") {
+  return String(filePath)
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .trim();
+}
+
+function normalizeAbsolutePath(absolutePath: string) {
+  return path.resolve(absolutePath);
+}
+
+function isInsideProjectRoot(absolutePath: string) {
+  const relative = path.relative(PROJECT_ROOT, absolutePath);
+
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function hasPathTraversal(filePath: string) {
   const normalized = normalizeProjectPath(filePath);
 
   return (
-    normalized.includes("../") ||
-    normalized.includes("..\\") ||
+    !normalized ||
     normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
     path.isAbsolute(filePath)
   );
 }
 
 function resolveProjectPath(filePath: string) {
   const normalizedPath = normalizeProjectPath(filePath);
-  const absolutePath = path.resolve(PROJECT_ROOT, normalizedPath);
 
-  if (!absolutePath.startsWith(PROJECT_ROOT)) {
+  if (!normalizedPath) {
+    return {
+      normalizedPath,
+      absolutePath: PROJECT_ROOT,
+    };
+  }
+
+  const absolutePath = normalizeAbsolutePath(
+    path.resolve(PROJECT_ROOT, normalizedPath)
+  );
+
+  if (!isInsideProjectRoot(absolutePath)) {
     throw new Error("Path is outside project root");
   }
 
@@ -74,11 +110,23 @@ function resolveProjectPath(filePath: string) {
   };
 }
 
+function pathMatchesMarker(filePath: string, marker: string) {
+  const normalized = normalizeProjectPath(filePath).toLowerCase();
+  const normalizedMarker = normalizeProjectPath(marker).toLowerCase();
+
+  return (
+    normalized === normalizedMarker ||
+    normalized.startsWith(`${normalizedMarker}/`) ||
+    normalized.includes(`/${normalizedMarker}/`) ||
+    normalized.includes(normalizedMarker)
+  );
+}
+
 function isBlockedPath(filePath: string) {
   const normalized = normalizeProjectPath(filePath).toLowerCase();
 
   return BLOCKED_PATHS.some((blocked) =>
-    normalized.includes(blocked.toLowerCase())
+    pathMatchesMarker(normalized, blocked)
   );
 }
 
@@ -86,7 +134,7 @@ function isHighRiskPath(filePath: string) {
   const normalized = normalizeProjectPath(filePath).toLowerCase();
 
   return HIGH_RISK_PATHS.some((risky) =>
-    normalized.includes(risky.toLowerCase())
+    pathMatchesMarker(normalized, risky)
   );
 }
 
@@ -105,6 +153,21 @@ async function fileExists(absolutePath: string) {
   } catch {
     return false;
   }
+}
+
+function requireRollbackApproval(options?: RollbackApprovalOptions) {
+  if (!options?.approvedByGabi) {
+    return {
+      approved: false,
+      reason:
+        "Rollback execution requires explicit Gabi approval. Use an approved pending action flow before calling rollbackFile.",
+    };
+  }
+
+  return {
+    approved: true,
+    reason: "Rollback approved by Gabi",
+  };
 }
 
 export function validateRollbackPath(filePath: string): RollbackValidation {
@@ -148,10 +211,13 @@ export function validateRollbackPath(filePath: string): RollbackValidation {
   }
 
   return {
-    allowed: true,
-    blocked: false,
+    allowed: risk !== "critical",
+    blocked: risk === "critical",
     risk,
-    reason: "Rollback path validated",
+    reason:
+      risk === "critical"
+        ? "Critical rollback path is blocked"
+        : "Rollback path validated",
     normalizedPath,
     absolutePath,
     requiresApproval: true,
@@ -170,9 +236,11 @@ function resolveBackupPath(targetFilePath: string, backupFilePath?: string) {
   }
 
   const backupNormalized = normalizeProjectPath(backupFilePath);
-  const backupAbsolute = path.resolve(PROJECT_ROOT, backupNormalized);
+  const backupAbsolute = normalizeAbsolutePath(
+    path.resolve(PROJECT_ROOT, backupNormalized)
+  );
 
-  if (!backupAbsolute.startsWith(PROJECT_ROOT)) {
+  if (!isInsideProjectRoot(backupAbsolute)) {
     throw new Error("Backup path is outside project root");
   }
 
@@ -181,8 +249,12 @@ function resolveBackupPath(targetFilePath: string, backupFilePath?: string) {
   }
 
   const targetBaseName = path.basename(target.absolutePath);
+  const backupBaseName = path.basename(backupAbsolute);
 
-  if (!path.basename(backupAbsolute).startsWith(targetBaseName)) {
+  if (
+    backupBaseName !== `${targetBaseName}.backup` &&
+    !backupBaseName.startsWith(`${targetBaseName}.`)
+  ) {
     throw new Error("Backup does not appear to belong to target file");
   }
 
@@ -233,6 +305,10 @@ export async function createRollbackPoint(
     size: stat.size,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
+    truthPolicy: {
+      fileChanged: false,
+      backupCreatedOnly: true,
+    },
     timestamp: now(),
   };
 }
@@ -316,6 +392,12 @@ export async function previewRollback(
       backupPath: normalizeProjectPath(
         path.relative(PROJECT_ROOT, backupAbsolutePath)
       ),
+      risk: validation.risk,
+      requiresApproval: true,
+      truthPolicy: {
+        fileChanged: false,
+        previewOnly: true,
+      },
       timestamp: now(),
     };
   }
@@ -346,18 +428,29 @@ export async function previewRollback(
 
     risk: validation.risk,
     requiresApproval: true,
+    truthPolicy: {
+      fileChanged: false,
+      previewOnly: true,
+    },
     timestamp: now(),
   };
 }
 
 export async function rollbackFile(
   filePath: string,
-  backupFilePath?: string
+  backupFilePath?: string,
+  options?: RollbackApprovalOptions
 ) {
   const validation = validateRollbackPath(filePath);
 
   if (!validation.allowed) {
     throw new Error(validation.reason);
+  }
+
+  const approval = requireRollbackApproval(options);
+
+  if (!approval.approved) {
+    throw new Error(approval.reason);
   }
 
   const backupAbsolutePath = resolveBackupPath(
@@ -390,15 +483,24 @@ export async function rollbackFile(
     beforeRollbackBackup,
     risk: validation.risk,
     requiresApproval: true,
+    approvedBy: options?.approvedBy || "Gabi",
+    pendingActionId: options?.pendingActionId || null,
+    reason: options?.reason || "Approved rollback execution",
+    truthPolicy: {
+      fileChanged: true,
+      executedOnlyWithExplicitApproval: true,
+      backupCreatedBeforeRollback: true,
+    },
     timestamp: now(),
   };
 }
 
 export async function restoreFileFromBackup(
   filePath: string,
-  backupFilePath?: string
+  backupFilePath?: string,
+  options?: RollbackApprovalOptions
 ) {
-  return rollbackFile(filePath, backupFilePath);
+  return rollbackFile(filePath, backupFilePath, options);
 }
 
 export async function getRollbackState(filePath: string) {
@@ -417,6 +519,10 @@ export async function getRollbackState(filePath: string) {
     backupCount: backups.length,
     latestBackup: backups[0] || null,
     backups,
+    truthPolicy: {
+      fileChanged: false,
+      stateCheckOnly: true,
+    },
     timestamp: now(),
   };
 }
