@@ -155,6 +155,19 @@ function getActionId(action: PendingActionRecord) {
   return String(action?.id || "").trim();
 }
 
+function buildApprovalOptions(
+  action: PendingActionRecord,
+  reason: string
+) {
+  return {
+    approvedByGabi: true,
+    approvedBy: "Gabi",
+    pendingActionId: getActionId(action),
+    reason,
+    source: "code-tools-handler",
+  };
+}
+
 async function rememberCodeFile(
   filePath: string,
   content: string,
@@ -592,12 +605,21 @@ export async function handleExecuteWriteFile(message: string) {
       });
     }
 
-    const result = await writeProjectFile(filePath, content);
+    const result = await writeProjectFile(
+      filePath,
+      content,
+      buildApprovalOptions(
+        action,
+        "Approved pending write action executed by code-tools-handler"
+      )
+    );
+
     const memory = await rememberCodeFile(
       filePath,
       content,
       "EXECUTE_WRITE_FILE"
     );
+
     const completedAction = await markPendingActionCompleted(action);
 
     return response("EXECUTE_WRITE_FILE", "completed", {
@@ -608,6 +630,7 @@ export async function handleExecuteWriteFile(message: string) {
       truthPolicy: {
         executedOnlyAfterPendingApproval: true,
         fileWrittenByDevAgent: true,
+        devAgentReceivedExplicitApproval: true,
       },
     });
   } catch (error: any) {
@@ -677,15 +700,21 @@ export async function handleExecutePatchFile(message: string) {
     const result = await patchProjectFile(
       filePath,
       blocks.searchText,
-      blocks.replacementText
+      blocks.replacementText,
+      buildApprovalOptions(
+        action,
+        "Approved pending patch action executed by code-tools-handler"
+      )
     );
 
     const content = await readProjectFile(filePath);
+
     const memory = await rememberCodeFile(
       filePath,
       content,
       "EXECUTE_PATCH_FILE"
     );
+
     const completedAction = await markPendingActionCompleted(action);
 
     return response("EXECUTE_PATCH_FILE", "completed", {
@@ -696,6 +725,7 @@ export async function handleExecutePatchFile(message: string) {
       truthPolicy: {
         executedOnlyAfterPendingApproval: true,
         filePatchedByDevAgent: true,
+        devAgentReceivedExplicitApproval: true,
       },
     });
   } catch (error: any) {
@@ -808,7 +838,7 @@ export async function handleExecuteRollbackFile(message: string) {
       });
     }
 
-    const validation = validateProjectFilePath(filePath, "patch");
+    const validation = validateProjectFilePath(filePath, "rollback");
 
     if (!validation.allowed) {
       return response("EXECUTE_ROLLBACK_FILE", "blocked", {
@@ -818,13 +848,22 @@ export async function handleExecuteRollbackFile(message: string) {
       });
     }
 
-    const result = await rollbackProjectFile(filePath);
+    const result = await rollbackProjectFile(
+      filePath,
+      buildApprovalOptions(
+        action,
+        "Approved pending rollback action executed by code-tools-handler"
+      )
+    );
+
     const content = await readProjectFile(filePath);
+
     const memory = await rememberCodeFile(
       filePath,
       content,
       "EXECUTE_ROLLBACK_FILE"
     );
+
     const completedAction = await markPendingActionCompleted(action);
 
     return response("EXECUTE_ROLLBACK_FILE", "completed", {
@@ -835,6 +874,7 @@ export async function handleExecuteRollbackFile(message: string) {
       truthPolicy: {
         executedOnlyAfterPendingApproval: true,
         rollbackByDevAgent: true,
+        devAgentReceivedExplicitApproval: true,
       },
     });
   } catch (error: any) {
