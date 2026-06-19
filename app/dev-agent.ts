@@ -3,6 +3,13 @@ import path from "path";
 
 export type DevAgentRisk = "low" | "medium" | "high" | "critical";
 
+export type DevAgentAction =
+  | "read"
+  | "write"
+  | "patch"
+  | "delete"
+  | "rollback";
+
 export type DevAgentValidation = {
   allowed: boolean;
   blocked: boolean;
@@ -20,6 +27,14 @@ export type DevAgentFileInfo = {
   modifiedAt: string;
 };
 
+export type DevAgentApprovalOptions = {
+  approvedByGabi?: boolean;
+  approvedBy?: string;
+  pendingActionId?: string;
+  reason?: string;
+  source?: string;
+};
+
 export type DevAgentWriteResult = {
   success: boolean;
   action: "write";
@@ -27,6 +42,8 @@ export type DevAgentWriteResult = {
   backupPath?: string;
   risk: DevAgentRisk;
   requiresApproval: boolean;
+  approvedBy?: string;
+  pendingActionId?: string | null;
   timestamp: string;
 };
 
@@ -38,6 +55,10 @@ export type DevAgentPatchResult = {
   changed: boolean;
   risk: DevAgentRisk;
   requiresApproval: boolean;
+  approvedBy?: string;
+  pendingActionId?: string | null;
+  reason?: string;
+  matches?: number;
   timestamp: string;
 };
 
@@ -78,34 +99,78 @@ function now() {
   return new Date().toISOString();
 }
 
-function normalizeProjectPath(filePath: string) {
-  return filePath.replace(/\\/g, "/").trim().replace(/^\/+/, "");
+function normalizeProjectPath(filePath = "") {
+  return String(filePath)
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .trim();
 }
 
-function hasPathTraversal(filePath: string) {
+function normalizeRulePath(filePath = "") {
+  return normalizeProjectPath(filePath)
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
+function hasPathTraversal(filePath = "") {
   const normalized = normalizeProjectPath(filePath);
 
   return (
-    normalized.includes("../") ||
-    normalized.includes("..\\") ||
     normalized === ".." ||
-    path.isAbsolute(filePath)
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
+    path.isAbsolute(filePath) ||
+    /^[a-zA-Z]:\//.test(normalized)
+  );
+}
+
+function isInsideProjectRoot(absolutePath: string) {
+  const relative = path.relative(PROJECT_ROOT, absolutePath);
+
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function pathMatchesRule(filePath: string, rulePath: string) {
+  const normalized = normalizeRulePath(filePath);
+  const rule = normalizeRulePath(rulePath);
+
+  if (!normalized || !rule) return false;
+
+  const segments = normalized.split("/");
+
+  if (rule.startsWith(".")) {
+    return segments.some(
+      (segment) =>
+        segment === rule ||
+        segment.startsWith(`${rule}.`)
+    );
+  }
+
+  if (rule === "node_modules" || rule === ".git") {
+    return segments.includes(rule);
+  }
+
+  return (
+    normalized === rule ||
+    normalized.startsWith(`${rule}/`) ||
+    normalized.startsWith(`${rule}.`)
   );
 }
 
 function isBlockedPath(filePath: string) {
-  const normalized = normalizeProjectPath(filePath).toLowerCase();
-
   return BLOCKED_PATHS.some((blocked) =>
-    normalized.includes(blocked.toLowerCase())
+    pathMatchesRule(filePath, blocked)
   );
 }
 
 function isHighRiskPath(filePath: string) {
-  const normalized = normalizeProjectPath(filePath).toLowerCase();
-
   return HIGH_RISK_PATHS.some((risky) =>
-    normalized.includes(risky.toLowerCase())
+    pathMatchesRule(filePath, risky)
   );
 }
 
@@ -123,9 +188,9 @@ function isAllowedExtension(filePath: string) {
 
 function resolveProjectPath(filePath: string) {
   const normalizedPath = normalizeProjectPath(filePath);
-  const absolutePath = path.resolve(PROJECT_ROOT, normalizedPath);
+  const absolutePath = path.resolve(PROJECT_ROOT, normalizedPath || ".");
 
-  if (!absolutePath.startsWith(PROJECT_ROOT)) {
+  if (!isInsideProjectRoot(absolutePath)) {
     throw new Error("Path is outside project root");
   }
 
@@ -135,19 +200,60 @@ function resolveProjectPath(filePath: string) {
   };
 }
 
-function detectRisk(filePath: string, action: "read" | "write" | "patch" | "delete") {
+function detectRisk(
+  filePath: string,
+  action: DevAgentAction
+): DevAgentRisk {
   if (hasPathTraversal(filePath)) return "critical";
   if (isBlockedPath(filePath)) return "critical";
   if (action === "delete") return "critical";
   if (isHighRiskPath(filePath)) return "high";
-  if (action === "write" || action === "patch") return "medium";
+  if (
+    action === "write" ||
+    action === "patch" ||
+    action === "rollback"
+  ) {
+    return "medium";
+  }
 
   return "low";
 }
 
+function assertWriteApproval(
+  validation: DevAgentValidation,
+  options?: DevAgentApprovalOptions
+) {
+  if (
+    validation.requiresApproval &&
+    options?.approvedByGabi !== true
+  ) {
+    throw new Error(
+      "Dev-agent write/patch/rollback requires explicit Gabi approval through an approved pending action."
+    );
+  }
+}
+
+function countExactMatches(content: string, searchText: string) {
+  if (!searchText) return 0;
+
+  let count = 0;
+  let index = 0;
+
+  while (true) {
+    const foundAt = content.indexOf(searchText, index);
+
+    if (foundAt === -1) break;
+
+    count += 1;
+    index = foundAt + searchText.length;
+  }
+
+  return count;
+}
+
 export function validateProjectFilePath(
   filePath: string,
-  action: "read" | "write" | "patch" | "delete" = "read"
+  action: DevAgentAction = "read"
 ): DevAgentValidation {
   const { normalizedPath, absolutePath } = resolveProjectPath(filePath);
   const risk = detectRisk(normalizedPath, action);
@@ -264,13 +370,16 @@ export async function readProjectFile(filePath: string) {
 
 export async function writeProjectFile(
   filePath: string,
-  content: string
+  content: string,
+  options?: DevAgentApprovalOptions
 ): Promise<DevAgentWriteResult> {
   const validation = validateProjectFilePath(filePath, "write");
 
   if (!validation.allowed) {
     throw new Error(validation.reason);
   }
+
+  assertWriteApproval(validation, options);
 
   const backupPath = await createFileBackup(validation.normalizedPath);
 
@@ -285,6 +394,8 @@ export async function writeProjectFile(
     backupPath: backupPath || undefined,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
+    approvedBy: options?.approvedBy || "Gabi",
+    pendingActionId: options?.pendingActionId || null,
     timestamp: now(),
   };
 }
@@ -292,7 +403,8 @@ export async function writeProjectFile(
 export async function patchProjectFile(
   filePath: string,
   searchText: string,
-  replacementText: string
+  replacementText: string,
+  options?: DevAgentApprovalOptions
 ): Promise<DevAgentPatchResult> {
   const validation = validateProjectFilePath(filePath, "patch");
 
@@ -300,9 +412,12 @@ export async function patchProjectFile(
     throw new Error(validation.reason);
   }
 
-  const currentContent = await readProjectFile(validation.normalizedPath);
+  assertWriteApproval(validation, options);
 
-  if (!currentContent.includes(searchText)) {
+  const currentContent = await readProjectFile(validation.normalizedPath);
+  const matches = countExactMatches(currentContent, searchText);
+
+  if (matches === 0) {
     return {
       success: false,
       action: "patch",
@@ -310,6 +425,26 @@ export async function patchProjectFile(
       changed: false,
       risk: validation.risk,
       requiresApproval: validation.requiresApproval,
+      approvedBy: options?.approvedBy || "Gabi",
+      pendingActionId: options?.pendingActionId || null,
+      reason: "Search text was not found in current file content",
+      matches,
+      timestamp: now(),
+    };
+  }
+
+  if (matches > 1) {
+    return {
+      success: false,
+      action: "patch",
+      filePath: validation.normalizedPath,
+      changed: false,
+      risk: validation.risk,
+      requiresApproval: validation.requiresApproval,
+      approvedBy: options?.approvedBy || "Gabi",
+      pendingActionId: options?.pendingActionId || null,
+      reason: "Search text appears multiple times; patch is ambiguous",
+      matches,
       timestamp: now(),
     };
   }
@@ -328,16 +463,25 @@ export async function patchProjectFile(
     changed: true,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
+    approvedBy: options?.approvedBy || "Gabi",
+    pendingActionId: options?.pendingActionId || null,
+    reason: "Patch applied after exact single match validation",
+    matches,
     timestamp: now(),
   };
 }
 
-export async function rollbackProjectFile(filePath: string) {
-  const validation = validateProjectFilePath(filePath, "write");
+export async function rollbackProjectFile(
+  filePath: string,
+  options?: DevAgentApprovalOptions
+) {
+  const validation = validateProjectFilePath(filePath, "rollback");
 
   if (!validation.allowed) {
     throw new Error(validation.reason);
   }
+
+  assertWriteApproval(validation, options);
 
   const backupPath = `${validation.absolutePath}.backup`;
 
@@ -346,6 +490,10 @@ export async function rollbackProjectFile(filePath: string) {
   if (!exists) {
     throw new Error(`No backup found for ${validation.normalizedPath}`);
   }
+
+  const beforeRollbackBackup = await createFileBackup(
+    validation.normalizedPath
+  );
 
   const backupContent = await fs.readFile(backupPath, "utf8");
 
@@ -356,6 +504,11 @@ export async function rollbackProjectFile(filePath: string) {
     action: "rollback",
     filePath: validation.normalizedPath,
     backupPath: normalizeProjectPath(path.relative(PROJECT_ROOT, backupPath)),
+    beforeRollbackBackup,
+    risk: validation.risk,
+    requiresApproval: validation.requiresApproval,
+    approvedBy: options?.approvedBy || "Gabi",
+    pendingActionId: options?.pendingActionId || null,
     timestamp: now(),
   };
 }
@@ -376,10 +529,13 @@ async function walkDirectory(
       path.join(basePath, entry.name)
     );
 
+    const lowerRelative = relativeEntryPath.toLowerCase();
+    const parts = lowerRelative.split("/");
+
     if (
-      relativeEntryPath.includes("node_modules") ||
-      relativeEntryPath.includes(".git") ||
-      relativeEntryPath.includes(".next")
+      parts.includes("node_modules") ||
+      parts.includes(".git") ||
+      parts.includes(".next")
     ) {
       continue;
     }
@@ -491,6 +647,10 @@ export async function analyzeProjectFileSafety(filePath: string) {
     filePath: readValidation.normalizedPath,
     canRead: readValidation.allowed,
     canWrite: writeValidation.allowed,
+    canWriteWithoutApproval:
+      writeValidation.allowed && !writeValidation.requiresApproval,
+    canWriteWithApproval:
+      writeValidation.allowed && writeValidation.requiresApproval,
     readRisk: readValidation.risk,
     writeRisk: writeValidation.risk,
     requiresApproval: writeValidation.requiresApproval,
@@ -505,7 +665,9 @@ export async function searchProjectFiles(
   startDirectory = "app"
 ) {
   const files = await listProjectFiles(startDirectory);
-  const lowerQuery = query.toLowerCase();
+  const lowerQuery = query.toLowerCase().trim();
+
+  if (!lowerQuery) return [];
 
   return files.filter((filePath) =>
     filePath.toLowerCase().includes(lowerQuery)
@@ -518,21 +680,25 @@ export async function searchInsideProjectFiles(
   limit = 20
 ) {
   const files = await listProjectFiles(startDirectory);
-  const lowerQuery = query.toLowerCase();
+  const lowerQuery = query.toLowerCase().trim();
   const matches: any[] = [];
+
+  if (!lowerQuery) return [];
 
   for (const filePath of files) {
     if (matches.length >= limit) break;
 
     try {
       const content = await readProjectFile(filePath);
+      const lowerContent = content.toLowerCase();
+      const foundAt = lowerContent.indexOf(lowerQuery);
 
-      if (content.toLowerCase().includes(lowerQuery)) {
+      if (foundAt !== -1) {
         matches.push({
           filePath,
           preview: content.slice(
-            Math.max(0, content.toLowerCase().indexOf(lowerQuery) - 200),
-            content.toLowerCase().indexOf(lowerQuery) + 500
+            Math.max(0, foundAt - 200),
+            foundAt + 500
           ),
         });
       }
@@ -560,7 +726,14 @@ export async function getDevAgentState() {
       blocksNodeModules: true,
       blocksPathTraversal: true,
       createsBackupsBeforeWrite: true,
+      requiresExplicitGabiApprovalForWritePatchRollback: true,
+      rejectsAmbiguousPatches: true,
       requiresApprovalForMediumHighCriticalRisk: true,
+    },
+    truthPolicy: {
+      readOperationsDoNotModifyFiles: true,
+      writePatchRollbackRequireApproval: true,
+      backupsCreatedBeforeWritePatchRollback: true,
     },
     timestamp: now(),
   };
