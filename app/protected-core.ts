@@ -51,7 +51,69 @@ function now() {
 }
 
 function normalizePath(filePath = "") {
-  return filePath.replace(/\\/g, "/").trim().replace(/^\/+/, "");
+  return String(filePath)
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .trim();
+}
+
+function detectPathTraversal(filePath = "") {
+  const normalized = normalizePath(filePath);
+
+  return (
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../") ||
+    /^[a-zA-Z]:\//.test(normalized)
+  );
+}
+
+function isReadAction(action: CoreActionType) {
+  return action === "read" || action === "status_claim";
+}
+
+function isWriteLikeAction(action: CoreActionType) {
+  return (
+    action === "write" ||
+    action === "patch" ||
+    action === "rollback" ||
+    action === "delete" ||
+    action === "execute" ||
+    action === "evolution" ||
+    action === "memory_change" ||
+    action === "system_change"
+  );
+}
+
+function pathMatchesRule(filePath: string, rulePath: string) {
+  const normalizedFile = normalizePath(filePath).toLowerCase();
+  const normalizedRule = normalizePath(rulePath).toLowerCase();
+
+  if (!normalizedFile || !normalizedRule) return false;
+
+  if (normalizedFile === normalizedRule) return true;
+
+  if (normalizedRule.startsWith(".env")) {
+    return (
+      normalizedFile === normalizedRule ||
+      normalizedFile.startsWith(`${normalizedRule}.`) ||
+      normalizedFile.startsWith(`${normalizedRule}/`)
+    );
+  }
+
+  return (
+    normalizedFile.startsWith(`${normalizedRule}/`) ||
+    normalizedFile.startsWith(`${normalizedRule}.backup`) ||
+    normalizedFile.startsWith(`${normalizedRule}.`)
+  );
+}
+
+function highestRisk(current: CoreRisk, next: CoreRisk): CoreRisk {
+  const order: CoreRisk[] = ["low", "medium", "high", "critical"];
+
+  return order.indexOf(next) > order.indexOf(current) ? next : current;
 }
 
 export const AWENIA_OWNER = {
@@ -200,12 +262,10 @@ export const protectedFiles: ProtectedFileRule[] = [
 const HIGH_RISK_ACTIONS: CoreActionType[] = [
   "write",
   "patch",
-  "delete",
   "rollback",
   "execute",
   "evolution",
   "memory_change",
-  "system_change",
 ];
 
 const CRITICAL_ACTIONS: CoreActionType[] = [
@@ -214,26 +274,6 @@ const CRITICAL_ACTIONS: CoreActionType[] = [
   "system_change",
 ];
 
-function matchesProtectedPath(filePath: string, rulePath: string) {
-  const normalizedFile = normalizePath(filePath).toLowerCase();
-  const normalizedRule = normalizePath(rulePath).toLowerCase();
-
-  return (
-    normalizedFile === normalizedRule ||
-    normalizedFile.includes(normalizedRule)
-  );
-}
-
-function detectPathTraversal(filePath: string) {
-  const normalized = normalizePath(filePath);
-
-  return (
-    normalized.includes("../") ||
-    normalized.includes("..\\") ||
-    normalized === ".."
-  );
-}
-
 export function getProtectedFileRule(
   filePath: string
 ): ProtectedFileRule | null {
@@ -241,21 +281,22 @@ export function getProtectedFileRule(
 
   return (
     protectedFiles.find((rule) =>
-      matchesProtectedPath(normalized, rule.path)
+      pathMatchesRule(normalized, rule.path)
     ) || null
   );
 }
 
 export function getProtectionLevel(filePath: string): ProtectionLevel {
-  const rule = getProtectedFileRule(filePath);
+  const normalized = normalizePath(filePath);
+  const rule = getProtectedFileRule(normalized);
 
   if (rule) return rule.protectionLevel;
 
   if (
-    normalizePath(filePath).startsWith("app/api/") ||
-    normalizePath(filePath).includes("memory") ||
-    normalizePath(filePath).includes("agent") ||
-    normalizePath(filePath).includes("runtime")
+    normalized.startsWith("app/api/") ||
+    normalized.includes("memory") ||
+    normalized.includes("agent") ||
+    normalized.includes("runtime")
   ) {
     return "sensitive";
   }
@@ -281,8 +322,15 @@ export function requiresApproval(
   action: CoreActionType,
   filePath = ""
 ) {
-  const level = getProtectionLevel(filePath);
+  const normalized = normalizePath(filePath);
+  const rule = getProtectedFileRule(normalized);
+  const level = getProtectionLevel(normalized);
 
+  if (action === "read" || action === "status_claim") {
+    return false;
+  }
+
+  if (rule?.requiresApproval) return true;
   if (level === "locked") return true;
   if (level === "protected") return true;
   if (level === "sensitive" && HIGH_RISK_ACTIONS.includes(action)) return true;
@@ -302,15 +350,35 @@ export function detectCoreRisk(
   action: CoreActionType,
   filePath = ""
 ): CoreRisk {
-  const level = getProtectionLevel(filePath);
+  const normalized = normalizePath(filePath);
+  const rule = getProtectedFileRule(normalized);
+  const level = getProtectionLevel(normalized);
 
-  if (detectPathTraversal(filePath)) return "critical";
-  if (level === "locked") return "critical";
+  if (detectPathTraversal(normalized)) return "critical";
+
+  if (rule) {
+    if (isReadAction(action)) {
+      if (!rule.allowRead) return "critical";
+      if (rule.protectionLevel === "locked") return "medium";
+      if (rule.protectionLevel === "protected") return "low";
+    }
+
+    if (isWriteLikeAction(action)) {
+      if (!rule.allowWrite) return "critical";
+      if (rule.protectionLevel === "locked") return "critical";
+      if (rule.protectionLevel === "protected") return "high";
+    }
+  }
+
   if (CRITICAL_ACTIONS.includes(action)) return "critical";
-  if (level === "protected") return "high";
+
+  if (level === "locked" && !isReadAction(action)) return "critical";
+  if (level === "protected" && isWriteLikeAction(action)) return "high";
+
   if (level === "sensitive" && HIGH_RISK_ACTIONS.includes(action)) {
     return "high";
   }
+
   if (HIGH_RISK_ACTIONS.includes(action)) return "medium";
 
   return "low";
@@ -323,22 +391,42 @@ export function validateCoreAction(input: {
   verified?: boolean;
   reason?: string;
 }): CoreValidationResult {
+  const action = input.action;
   const filePath = normalizePath(input.filePath || "");
+  const rule = getProtectedFileRule(filePath);
   const protectionLevel = filePath
     ? getProtectionLevel(filePath)
     : "normal";
 
-  const risk = detectCoreRisk(input.action, filePath);
-  const approvalRequired = requiresGabiApproval(input.action, filePath);
-
+  let risk = detectCoreRisk(action, filePath);
+  const approvalRequired = requiresGabiApproval(action, filePath);
   const rulesTriggered: string[] = [];
 
+  let hardBlocked = false;
+  let needsVerification = false;
+
   if (detectPathTraversal(filePath)) {
+    hardBlocked = true;
+    risk = "critical";
     rulesTriggered.push("path_traversal_blocked");
   }
 
-  if (protectionLevel === "locked") {
-    rulesTriggered.push("locked_file");
+  if (rule) {
+    if (isReadAction(action) && !rule.allowRead) {
+      hardBlocked = true;
+      risk = "critical";
+      rulesTriggered.push("read_blocked_for_protected_file");
+    }
+
+    if (isWriteLikeAction(action) && !rule.allowWrite) {
+      hardBlocked = true;
+      risk = "critical";
+      rulesTriggered.push("write_blocked_for_protected_file");
+    }
+
+    if (rule.protectionLevel === "locked") {
+      rulesTriggered.push("locked_file");
+    }
   }
 
   if (approvalRequired) {
@@ -346,47 +434,82 @@ export function validateCoreAction(input: {
   }
 
   if (
-    input.action === "status_claim" &&
+    action === "status_claim" &&
     input.verified !== true
   ) {
+    needsVerification = true;
+    risk = highestRisk(risk, "medium");
     rulesTriggered.push("unverified_status_claim");
   }
 
   if (
-    input.action === "evolution" ||
-    input.action === "system_change"
+    action === "evolution" ||
+    action === "system_change"
   ) {
     rulesTriggered.push("controlled_evolution_required");
   }
 
-  const blocked =
-    detectPathTraversal(filePath) ||
-    protectionLevel === "locked" ||
-    (approvalRequired && input.approvedByGabi !== true) ||
-    (input.action === "status_claim" && input.verified !== true);
+  if (CRITICAL_ACTIONS.includes(action)) {
+    risk = "critical";
+    rulesTriggered.push("critical_action");
+  }
+
+  if (
+    action === "delete" ||
+    action === "system_change" ||
+    action === "execute"
+  ) {
+    hardBlocked = true;
+  }
+
+  const approvalMissing =
+    approvalRequired && input.approvedByGabi !== true;
+
+  const allowed =
+    !hardBlocked &&
+    !needsVerification &&
+    !approvalMissing;
+
+  const blocked = hardBlocked;
+
+  const reason = hardBlocked
+    ? "Action blocked by protected core rules"
+    : needsVerification
+      ? "Action needs direct verification before it can be treated as true"
+      : approvalMissing
+        ? "Action requires Gabi approval before execution"
+        : "Action allowed by protected core rules";
 
   return {
-    allowed: !blocked,
+    allowed,
     blocked,
     requiresGabiApproval: approvalRequired,
     risk,
     protectionLevel,
-    reason: blocked
-      ? "Action blocked by protected core rules"
-      : "Action allowed by protected core rules",
-    rulesTriggered,
+    reason,
+    rulesTriggered: Array.from(new Set(rulesTriggered)),
     timestamp: now(),
   };
 }
 
 export function canReadFile(filePath: string) {
-  const rule = getProtectedFileRule(filePath);
+  const normalized = normalizePath(filePath);
+
+  if (detectPathTraversal(normalized)) {
+    return {
+      allowed: false,
+      reason: "Path traversal is blocked",
+      protectionLevel: "locked" as ProtectionLevel,
+    };
+  }
+
+  const rule = getProtectedFileRule(normalized);
 
   if (!rule) {
     return {
       allowed: true,
       reason: "File is readable",
-      protectionLevel: getProtectionLevel(filePath),
+      protectionLevel: getProtectionLevel(normalized),
     };
   }
 
@@ -451,12 +574,13 @@ export function validateSystemStatusClaim(input: {
     source: input.source || "unknown",
     reason: validation.allowed
       ? "Status claim is allowed because it is verified"
-      : "Status claim blocked because it is not verified",
+      : "Status claim needs direct verification before it can be treated as true",
     truthPolicy: {
       noBuildStatusWithoutBuild: true,
       noFileStatusWithoutReadingFile: true,
       noInternetStatusWithoutCheck: true,
       noMemoryStatusWithoutDatabaseRead: true,
+      unverifiedClaimsAreNotFacts: true,
     },
     timestamp: now(),
   };
@@ -483,6 +607,7 @@ export function getProtectedCoreState() {
       pathTraversalBlocked: true,
       truthClaimsRequireVerification: true,
       controlledByGabi: true,
+      readStatusSeparatedFromExecution: true,
     },
     timestamp: now(),
   };
