@@ -25,6 +25,10 @@ import {
 import {
   savePendingAction,
   analyzePendingActionRisk,
+  getPendingActionById,
+  canExecutePendingAction,
+  completePendingAction,
+  failPendingAction,
 } from "./pending-actions";
 
 export type CodeToolStatus =
@@ -33,6 +37,8 @@ export type CodeToolStatus =
   | "blocked"
   | "failed"
   | "needs_attention";
+
+type PendingActionRecord = any;
 
 function now() {
   return new Date().toISOString();
@@ -53,7 +59,7 @@ function response(tool: string, status: CodeToolStatus, data: any) {
 }
 
 function stripCommand(message: string, commands: string[]) {
-  let cleaned = message.trim();
+  let cleaned = String(message || "").trim();
 
   for (const command of commands) {
     if (cleaned.toUpperCase().startsWith(command.toUpperCase())) {
@@ -64,25 +70,33 @@ function stripCommand(message: string, commands: string[]) {
   return cleaned;
 }
 
+function normalizePath(filePath = "") {
+  return String(filePath)
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .trim();
+}
+
 function extractCodeBlock(text: string) {
-  const match = text.match(/```[\w-]*\n([\s\S]*?)```/);
+  const match = String(text || "").match(/```[\w-]*\n([\s\S]*?)```/);
 
   if (match?.[1]) {
-    return match[1].trim();
+    return match[1].replace(/^\n/, "").replace(/\n$/, "");
   }
 
-  return text.trim();
+  return String(text || "").trim();
 }
 
 function parsePathOnly(message: string, commands: string[]) {
   const cleaned = stripCommand(message, commands);
-  return cleaned.split("\n")[0].trim();
+  return normalizePath(cleaned.split("\n")[0] || "");
 }
 
 function parsePathAndBody(message: string, commands: string[]) {
   const cleaned = stripCommand(message, commands);
   const lines = cleaned.split("\n");
-  const filePath = lines.shift()?.trim() || "";
+  const filePath = normalizePath(lines.shift() || "");
   const body = extractCodeBlock(lines.join("\n"));
 
   return {
@@ -91,21 +105,54 @@ function parsePathAndBody(message: string, commands: string[]) {
   };
 }
 
-function parsePatch(message: string) {
-  const { filePath, body } = parsePathAndBody(message, [
-    "PATCH_FILE:",
-    "PATCH_REAL_FILE:",
-  ]);
+function parseSearchReplaceBlocks(text: string) {
+  const body = String(text || "");
 
   const searchMatch = body.match(/SEARCH:\s*([\s\S]*?)\s*REPLACE:/i);
   const replaceMatch = body.match(/REPLACE:\s*([\s\S]*)/i);
 
   return {
-    filePath,
-    patch: body,
     searchText: searchMatch?.[1]?.trim() || "",
     replacementText: replaceMatch?.[1]?.trim() || "",
   };
+}
+
+function parsePatch(message: string) {
+  const { filePath, body } = parsePathAndBody(message, [
+    "PATCH_FILE:",
+    "PATCH_REAL_FILE:",
+    "EXECUTE_PATCH:",
+    "EXECUTE_PATCH_FILE:",
+    "GENERATE_PATCH:",
+    "CREATE_PATCH:",
+  ]);
+
+  const blocks = parseSearchReplaceBlocks(body);
+
+  return {
+    filePath,
+    patch: body,
+    searchText: blocks.searchText,
+    replacementText: blocks.replacementText,
+  };
+}
+
+function parsePendingActionId(message: string, commands: string[]) {
+  const cleaned = stripCommand(message, commands);
+  const firstLine = cleaned.split("\n")[0]?.trim() || "";
+
+  return firstLine
+    .replace(/^ID:\s*/i, "")
+    .replace(/^PENDING_ACTION_ID:\s*/i, "")
+    .trim();
+}
+
+function getActionType(action: PendingActionRecord) {
+  return String(action?.action_type || "").trim().toUpperCase();
+}
+
+function getActionId(action: PendingActionRecord) {
+  return String(action?.id || "").trim();
 }
 
 async function rememberCodeFile(
@@ -114,21 +161,23 @@ async function rememberCodeFile(
   source = "code-tools-handler"
 ) {
   try {
-    await setActiveCodeFile(filePath);
+    const normalizedPath = normalizePath(filePath);
+
+    await setActiveCodeFile(normalizedPath);
 
     const summary = await (createSmartCodeSummary as any)(
-      filePath,
+      normalizedPath,
       content
     );
 
     const memoryPayload = {
-      file_path: filePath,
-      file_purpose: (detectFilePurpose as any)(filePath, content),
+      file_path: normalizedPath,
+      file_purpose: (detectFilePurpose as any)(normalizedPath, content),
       code_summary: summary,
       important_exports: (extractExports as any)(content),
       important_functions: (extractFunctions as any)(content),
-      risk_level: (detectRiskLevel as any)(filePath, content),
-      last_known_content: content.slice(0, 12000),
+      risk_level: (detectRiskLevel as any)(normalizedPath, content),
+      last_known_content: String(content || "").slice(0, 12000),
       source,
       updated_at: now(),
     };
@@ -147,6 +196,103 @@ async function rememberCodeFile(
   }
 }
 
+async function getExecutablePendingAction(
+  pendingActionId: string,
+  allowedTypes: string[]
+) {
+  if (!pendingActionId) {
+    return {
+      allowed: false,
+      reason:
+        "Missing pending action id. Use EXECUTE_* with an approved pending action id.",
+      action: null,
+      validation: null,
+    };
+  }
+
+  const action = await getPendingActionById(pendingActionId);
+
+  if (!action) {
+    return {
+      allowed: false,
+      reason: "Pending action not found",
+      action: null,
+      validation: null,
+    };
+  }
+
+  const actionType = getActionType(action);
+
+  if (!allowedTypes.includes(actionType)) {
+    return {
+      allowed: false,
+      reason: `Pending action type mismatch. Expected ${allowedTypes.join(
+        " or "
+      )}, received ${actionType || "unknown"}.`,
+      action,
+      validation: null,
+    };
+  }
+
+  const executionCheck = canExecutePendingAction(action);
+
+  return {
+    allowed: executionCheck.allowed,
+    reason: executionCheck.reason,
+    action,
+    validation: executionCheck.validation,
+  };
+}
+
+async function markPendingActionFailedIfPossible(
+  action: PendingActionRecord,
+  reason: string
+) {
+  try {
+    const id = getActionId(action);
+
+    if (!id) return null;
+
+    return await failPendingAction(id, reason);
+  } catch (error: any) {
+    return {
+      status: "failed",
+      error:
+        error?.message ||
+        "Failed to mark pending action as failed",
+    };
+  }
+}
+
+async function markPendingActionCompleted(action: PendingActionRecord) {
+  const id = getActionId(action);
+
+  if (!id) {
+    throw new Error("Missing pending action id");
+  }
+
+  return completePendingAction(id);
+}
+
+function getPatchBlocksFromPendingAction(action: PendingActionRecord) {
+  const metadata = action?.metadata || {};
+  const searchTextFromMetadata =
+    typeof metadata.searchText === "string" ? metadata.searchText : "";
+  const replacementTextFromMetadata =
+    typeof metadata.replacementText === "string"
+      ? metadata.replacementText
+      : "";
+
+  if (searchTextFromMetadata && replacementTextFromMetadata) {
+    return {
+      searchText: searchTextFromMetadata,
+      replacementText: replacementTextFromMetadata,
+    };
+  }
+
+  return parseSearchReplaceBlocks(action?.patch || "");
+}
+
 export async function handleListFiles(message = "LIST_FILES: app") {
   try {
     const startDirectory =
@@ -162,6 +308,10 @@ export async function handleListFiles(message = "LIST_FILES: app") {
       count: files.length,
       files,
       detailed,
+      truthPolicy: {
+        verifiedFromFilesystem: true,
+        noFakeFileList: true,
+      },
     });
   } catch (error: any) {
     return response("LIST_FILES", "failed", {
@@ -199,6 +349,10 @@ export async function handleReadRealFile(message: string) {
       safety,
       content,
       memory,
+      truthPolicy: {
+        verifiedFromFilesystem: true,
+        codeMemoryUpdatedBestEffort: true,
+      },
     });
   } catch (error: any) {
     return response("READ_REAL_FILE", "failed", {
@@ -259,6 +413,10 @@ export async function handleAnalyzeRealFile(message: string) {
       status: "completed",
       analysis,
       memory,
+      truthPolicy: {
+        verifiedFromFilesystem: true,
+        analysisBasedOnRealFileContent: true,
+      },
     });
   } catch (error: any) {
     return response("ANALYZE_REAL_FILE", "failed", {
@@ -288,6 +446,7 @@ export async function handleWriteFile(message: string) {
       content: body,
       reason: "Awenia generated file write",
       source: "code-tools-handler",
+      requires_approval: true,
     });
 
     const pendingAction = await savePendingAction({
@@ -296,8 +455,10 @@ export async function handleWriteFile(message: string) {
       content: body,
       reason: "Awenia generated file write",
       source: "code-tools-handler",
+      requires_approval: true,
       metadata: {
         risk,
+        createdByTool: "WRITE_FILE",
       },
     });
 
@@ -311,6 +472,10 @@ export async function handleWriteFile(message: string) {
         filePath,
         risk,
         pendingAction,
+        executeInstruction:
+          pendingAction?.id && !risk.blocked
+            ? `After Gabi approval, use EXECUTE_WRITE_FILE: ${pendingAction.id}`
+            : null,
       }
     );
   } catch (error: any) {
@@ -338,6 +503,7 @@ export async function handlePatchFile(message: string) {
       patch: parsed.patch,
       reason: "Awenia generated file patch",
       source: "code-tools-handler",
+      requires_approval: true,
     });
 
     const pendingAction = await savePendingAction({
@@ -346,10 +512,12 @@ export async function handlePatchFile(message: string) {
       patch: parsed.patch,
       reason: "Awenia generated file patch",
       source: "code-tools-handler",
+      requires_approval: true,
       metadata: {
         risk,
         searchText: parsed.searchText,
         replacementText: parsed.replacementText,
+        createdByTool: "PATCH_FILE",
       },
     });
 
@@ -363,6 +531,10 @@ export async function handlePatchFile(message: string) {
         filePath: parsed.filePath,
         risk,
         pendingAction,
+        executeInstruction:
+          pendingAction?.id && !risk.blocked
+            ? `After Gabi approval, use EXECUTE_PATCH_FILE: ${pendingAction.id}`
+            : null,
       }
     );
   } catch (error: any) {
@@ -374,10 +546,41 @@ export async function handlePatchFile(message: string) {
 }
 
 export async function handleExecuteWriteFile(message: string) {
+  let action: PendingActionRecord = null;
+
   try {
-    const { filePath, body } = parsePathAndBody(message, [
+    const pendingActionId = parsePendingActionId(message, [
+      "EXECUTE_WRITE:",
       "EXECUTE_WRITE_FILE:",
     ]);
+
+    const executable = await getExecutablePendingAction(
+      pendingActionId,
+      ["WRITE_FILE"]
+    );
+
+    action = executable.action;
+
+    if (!executable.allowed || !action) {
+      return response("EXECUTE_WRITE_FILE", "blocked", {
+        status: "blocked",
+        reason: executable.reason,
+        validation: executable.validation,
+        pendingActionId,
+        action,
+      });
+    }
+
+    const filePath = normalizePath(action.file_path);
+    const content = String(action.content || "");
+
+    if (!filePath || !content) {
+      return response("EXECUTE_WRITE_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "Approved pending write action is missing file path or content",
+        action,
+      });
+    }
 
     const validation = validateProjectFilePath(filePath, "write");
 
@@ -385,72 +588,128 @@ export async function handleExecuteWriteFile(message: string) {
       return response("EXECUTE_WRITE_FILE", "blocked", {
         status: "blocked",
         validation,
+        action,
       });
     }
 
-    const result = await writeProjectFile(filePath, body);
+    const result = await writeProjectFile(filePath, content);
     const memory = await rememberCodeFile(
       filePath,
-      body,
+      content,
       "EXECUTE_WRITE_FILE"
     );
+    const completedAction = await markPendingActionCompleted(action);
 
     return response("EXECUTE_WRITE_FILE", "completed", {
       status: "completed",
       result,
       memory,
+      completedAction,
+      truthPolicy: {
+        executedOnlyAfterPendingApproval: true,
+        fileWrittenByDevAgent: true,
+      },
     });
   } catch (error: any) {
+    const reason =
+      error?.message || "Unknown EXECUTE_WRITE_FILE error";
+
+    const failedAction = action
+      ? await markPendingActionFailedIfPossible(action, reason)
+      : null;
+
     return response("EXECUTE_WRITE_FILE", "failed", {
       status: "failed",
-      error: error?.message || "Unknown EXECUTE_WRITE_FILE error",
+      error: reason,
+      failedAction,
     });
   }
 }
 
 export async function handleExecutePatchFile(message: string) {
-  try {
-    const parsed = parsePatch(message);
+  let action: PendingActionRecord = null;
 
-    if (!parsed.filePath || !parsed.searchText || !parsed.replacementText) {
-      return response("EXECUTE_PATCH_FILE", "needs_attention", {
-        status: "needs_attention",
-        reason:
-          "Patch execution needs file path plus SEARCH: and REPLACE: blocks.",
+  try {
+    const pendingActionId = parsePendingActionId(message, [
+      "EXECUTE_PATCH:",
+      "EXECUTE_PATCH_FILE:",
+    ]);
+
+    const executable = await getExecutablePendingAction(
+      pendingActionId,
+      ["PATCH_FILE"]
+    );
+
+    action = executable.action;
+
+    if (!executable.allowed || !action) {
+      return response("EXECUTE_PATCH_FILE", "blocked", {
+        status: "blocked",
+        reason: executable.reason,
+        validation: executable.validation,
+        pendingActionId,
+        action,
       });
     }
 
-    const validation = validateProjectFilePath(parsed.filePath, "patch");
+    const filePath = normalizePath(action.file_path);
+    const blocks = getPatchBlocksFromPendingAction(action);
+
+    if (!filePath || !blocks.searchText || !blocks.replacementText) {
+      return response("EXECUTE_PATCH_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason:
+          "Approved pending patch action needs file path plus SEARCH and REPLACE blocks.",
+        action,
+      });
+    }
+
+    const validation = validateProjectFilePath(filePath, "patch");
 
     if (!validation.allowed) {
       return response("EXECUTE_PATCH_FILE", "blocked", {
         status: "blocked",
         validation,
+        action,
       });
     }
 
     const result = await patchProjectFile(
-      parsed.filePath,
-      parsed.searchText,
-      parsed.replacementText
+      filePath,
+      blocks.searchText,
+      blocks.replacementText
     );
 
-    const content = await readProjectFile(parsed.filePath);
+    const content = await readProjectFile(filePath);
     const memory = await rememberCodeFile(
-      parsed.filePath,
+      filePath,
       content,
       "EXECUTE_PATCH_FILE"
     );
+    const completedAction = await markPendingActionCompleted(action);
 
     return response("EXECUTE_PATCH_FILE", "completed", {
       status: "completed",
       result,
       memory,
+      completedAction,
+      truthPolicy: {
+        executedOnlyAfterPendingApproval: true,
+        filePatchedByDevAgent: true,
+      },
     });
   } catch (error: any) {
+    const reason =
+      error?.message || "Unknown EXECUTE_PATCH_FILE error";
+
+    const failedAction = action
+      ? await markPendingActionFailedIfPossible(action, reason)
+      : null;
+
     return response("EXECUTE_PATCH_FILE", "failed", {
       status: "failed",
-      error: error?.message || "Unknown EXECUTE_PATCH_FILE error",
+      error: reason,
+      failedAction,
     });
   }
 }
@@ -474,6 +733,7 @@ export async function handleRollbackFile(message: string) {
       file_path: filePath,
       reason: "Awenia requested rollback",
       source: "code-tools-handler",
+      requires_approval: true,
     });
 
     const pendingAction = await savePendingAction({
@@ -481,8 +741,10 @@ export async function handleRollbackFile(message: string) {
       file_path: filePath,
       reason: "Awenia requested rollback",
       source: "code-tools-handler",
+      requires_approval: true,
       metadata: {
         risk,
+        createdByTool: "ROLLBACK_FILE",
       },
     });
 
@@ -496,6 +758,10 @@ export async function handleRollbackFile(message: string) {
         filePath,
         risk,
         pendingAction,
+        executeInstruction:
+          pendingAction?.id && !risk.blocked
+            ? `After Gabi approval, use EXECUTE_ROLLBACK_FILE: ${pendingAction.id}`
+            : null,
       }
     );
   } catch (error: any) {
@@ -507,13 +773,48 @@ export async function handleRollbackFile(message: string) {
 }
 
 export async function handleExecuteRollbackFile(message: string) {
+  let action: PendingActionRecord = null;
+
   try {
-    const filePath = parsePathOnly(message, ["EXECUTE_ROLLBACK_FILE:"]);
+    const pendingActionId = parsePendingActionId(message, [
+      "EXECUTE_ROLLBACK:",
+      "EXECUTE_ROLLBACK_FILE:",
+    ]);
+
+    const executable = await getExecutablePendingAction(
+      pendingActionId,
+      ["ROLLBACK_FILE"]
+    );
+
+    action = executable.action;
+
+    if (!executable.allowed || !action) {
+      return response("EXECUTE_ROLLBACK_FILE", "blocked", {
+        status: "blocked",
+        reason: executable.reason,
+        validation: executable.validation,
+        pendingActionId,
+        action,
+      });
+    }
+
+    const filePath = normalizePath(action.file_path);
 
     if (!filePath) {
       return response("EXECUTE_ROLLBACK_FILE", "needs_attention", {
         status: "needs_attention",
-        reason: "Missing file path",
+        reason: "Approved pending rollback action is missing file path",
+        action,
+      });
+    }
+
+    const validation = validateProjectFilePath(filePath, "patch");
+
+    if (!validation.allowed) {
+      return response("EXECUTE_ROLLBACK_FILE", "blocked", {
+        status: "blocked",
+        validation,
+        action,
       });
     }
 
@@ -524,16 +825,30 @@ export async function handleExecuteRollbackFile(message: string) {
       content,
       "EXECUTE_ROLLBACK_FILE"
     );
+    const completedAction = await markPendingActionCompleted(action);
 
     return response("EXECUTE_ROLLBACK_FILE", "completed", {
       status: "completed",
       result,
       memory,
+      completedAction,
+      truthPolicy: {
+        executedOnlyAfterPendingApproval: true,
+        rollbackByDevAgent: true,
+      },
     });
   } catch (error: any) {
+    const reason =
+      error?.message || "Unknown EXECUTE_ROLLBACK_FILE error";
+
+    const failedAction = action
+      ? await markPendingActionFailedIfPossible(action, reason)
+      : null;
+
     return response("EXECUTE_ROLLBACK_FILE", "failed", {
       status: "failed",
-      error: error?.message || "Unknown EXECUTE_ROLLBACK_FILE error",
+      error: reason,
+      failedAction,
     });
   }
 }
@@ -565,6 +880,10 @@ export async function handleGeneratePatch(message: string) {
       format: {
         search: "SEARCH:",
         replace: "REPLACE:",
+      },
+      truthPolicy: {
+        noFileChanged: true,
+        verifiedFromFilesystem: true,
       },
     };
 
@@ -613,6 +932,7 @@ export async function handleSearchInsideFiles(message: string) {
   try {
     const query = stripCommand(message, [
       "SEARCH_INSIDE_FILES:",
+      "SEARCH_INSIDE_FILE:",
       "SEARCH_CODE:",
     ]);
 
