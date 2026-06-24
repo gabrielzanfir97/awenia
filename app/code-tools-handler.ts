@@ -60,10 +60,20 @@ function response(tool: string, status: CodeToolStatus, data: any) {
 
 function stripCommand(message: string, commands: string[]) {
   let cleaned = String(message || "").trim();
+  const upper = cleaned.toUpperCase();
 
   for (const command of commands) {
-    if (cleaned.toUpperCase().startsWith(command.toUpperCase())) {
-      cleaned = cleaned.slice(command.length).trim();
+    const base = command.replace(/:$/, "").trim();
+    const upperBase = base.toUpperCase();
+
+    if (
+      upper === upperBase ||
+      upper.startsWith(`${upperBase}:`) ||
+      upper.startsWith(`${upperBase} `)
+    ) {
+      cleaned = cleaned.slice(base.length).trim();
+      cleaned = cleaned.replace(/^:/, "").trim();
+      return cleaned;
     }
   }
 
@@ -119,12 +129,10 @@ function parseSearchReplaceBlocks(text: string) {
 
 function parsePatch(message: string) {
   const { filePath, body } = parsePathAndBody(message, [
-    "PATCH_FILE:",
-    "PATCH_REAL_FILE:",
-    "EXECUTE_PATCH:",
-    "EXECUTE_PATCH_FILE:",
-    "GENERATE_PATCH:",
-    "CREATE_PATCH:",
+    "PATCH_FILE",
+    "PATCH_REAL_FILE",
+    "GENERATE_PATCH",
+    "CREATE_PATCH",
   ]);
 
   const blocks = parseSearchReplaceBlocks(body);
@@ -309,7 +317,7 @@ function getPatchBlocksFromPendingAction(action: PendingActionRecord) {
 export async function handleListFiles(message = "LIST_FILES: app") {
   try {
     const startDirectory =
-      parsePathOnly(message, ["LIST_FILES:", "LIST_PROJECT_FILES:"]) ||
+      parsePathOnly(message, ["LIST_FILES", "LIST_PROJECT_FILES"]) ||
       "app";
 
     const files = await listProjectFiles(startDirectory);
@@ -337,8 +345,8 @@ export async function handleListFiles(message = "LIST_FILES: app") {
 export async function handleReadRealFile(message: string) {
   try {
     const filePath = parsePathOnly(message, [
-      "READ_REAL_FILE:",
-      "READ_FILE:",
+      "READ_REAL_FILE",
+      "READ_FILE",
     ]);
 
     if (!filePath) {
@@ -382,8 +390,8 @@ export async function handleReadFile(message: string) {
 export async function handleAnalyzeRealFile(message: string) {
   try {
     const filePath = parsePathOnly(message, [
-      "ANALYZE_REAL_FILE:",
-      "ANALYZE_FILE:",
+      "ANALYZE_REAL_FILE",
+      "ANALYZE_FILE",
     ]);
 
     if (!filePath) {
@@ -442,8 +450,8 @@ export async function handleAnalyzeRealFile(message: string) {
 export async function handleWriteFile(message: string) {
   try {
     const { filePath, body } = parsePathAndBody(message, [
-      "WRITE_FILE:",
-      "WRITE_REAL_FILE:",
+      "WRITE_FILE",
+      "WRITE_REAL_FILE",
     ]);
 
     if (!filePath || !body) {
@@ -563,8 +571,8 @@ export async function handleExecuteWriteFile(message: string) {
 
   try {
     const pendingActionId = parsePendingActionId(message, [
-      "EXECUTE_WRITE:",
-      "EXECUTE_WRITE_FILE:",
+      "EXECUTE_WRITE",
+      "EXECUTE_WRITE_FILE",
     ]);
 
     const executable = await getExecutablePendingAction(
@@ -654,8 +662,8 @@ export async function handleExecutePatchFile(message: string) {
 
   try {
     const pendingActionId = parsePendingActionId(message, [
-      "EXECUTE_PATCH:",
-      "EXECUTE_PATCH_FILE:",
+      "EXECUTE_PATCH",
+      "EXECUTE_PATCH_FILE",
     ]);
 
     const executable = await getExecutablePendingAction(
@@ -747,8 +755,8 @@ export async function handleExecutePatchFile(message: string) {
 export async function handleRollbackFile(message: string) {
   try {
     const filePath = parsePathOnly(message, [
-      "ROLLBACK_FILE:",
-      "ROLLBACK_REAL_FILE:",
+      "ROLLBACK_FILE",
+      "ROLLBACK_REAL_FILE",
     ]);
 
     if (!filePath) {
@@ -807,8 +815,8 @@ export async function handleExecuteRollbackFile(message: string) {
 
   try {
     const pendingActionId = parsePendingActionId(message, [
-      "EXECUTE_ROLLBACK:",
-      "EXECUTE_ROLLBACK_FILE:",
+      "EXECUTE_ROLLBACK",
+      "EXECUTE_ROLLBACK_FILE",
     ]);
 
     const executable = await getExecutablePendingAction(
@@ -896,8 +904,8 @@ export async function handleExecuteRollbackFile(message: string) {
 export async function handleGeneratePatch(message: string) {
   try {
     const { filePath, body } = parsePathAndBody(message, [
-      "GENERATE_PATCH:",
-      "CREATE_PATCH:",
+      "GENERATE_PATCH",
+      "CREATE_PATCH",
     ]);
 
     if (!filePath || !body) {
@@ -948,8 +956,8 @@ export async function handleGeneratePatch(message: string) {
 export async function handleSearchFiles(message: string) {
   try {
     const query = stripCommand(message, [
-      "SEARCH_FILES:",
-      "FIND_FILES:",
+      "SEARCH_FILES",
+      "FIND_FILES",
     ]);
 
     const matches = await searchProjectFiles(query || "", "app");
@@ -971,9 +979,10 @@ export async function handleSearchFiles(message: string) {
 export async function handleSearchInsideFiles(message: string) {
   try {
     const query = stripCommand(message, [
-      "SEARCH_INSIDE_FILES:",
-      "SEARCH_INSIDE_FILE:",
-      "SEARCH_CODE:",
+      "SEARCH_INSIDE_FILES",
+      "SEARCH_INSIDE_FILE",
+      "SEARCH_INSIDE",
+      "SEARCH_CODE",
     ]);
 
     const matches = await searchInsideProjectFiles(query || "", "app", 20);
@@ -991,3 +1000,117 @@ export async function handleSearchInsideFiles(message: string) {
     });
   }
 }
+
+export async function handleCodeToolCommand(message: string) {
+  const upper = String(message || "").trim().toUpperCase();
+
+  if (
+    upper.startsWith("LIST_FILES") ||
+    upper.startsWith("LIST_PROJECT_FILES")
+  ) {
+    return handleListFiles(message);
+  }
+
+  if (
+    upper.startsWith("READ_REAL_FILE") ||
+    upper.startsWith("READ_FILE")
+  ) {
+    return handleReadRealFile(message);
+  }
+
+  if (
+    upper.startsWith("ANALYZE_REAL_FILE") ||
+    upper.startsWith("ANALYZE_FILE")
+  ) {
+    return handleAnalyzeRealFile(message);
+  }
+
+  if (
+    upper.startsWith("WRITE_FILE") ||
+    upper.startsWith("WRITE_REAL_FILE")
+  ) {
+    return handleWriteFile(message);
+  }
+
+  if (
+    upper.startsWith("PATCH_FILE") ||
+    upper.startsWith("PATCH_REAL_FILE")
+  ) {
+    return handlePatchFile(message);
+  }
+
+  if (
+    upper.startsWith("EXECUTE_WRITE") ||
+    upper.startsWith("EXECUTE_WRITE_FILE")
+  ) {
+    return handleExecuteWriteFile(message);
+  }
+
+  if (
+    upper.startsWith("EXECUTE_PATCH") ||
+    upper.startsWith("EXECUTE_PATCH_FILE")
+  ) {
+    return handleExecutePatchFile(message);
+  }
+
+  if (
+    upper.startsWith("ROLLBACK_FILE") ||
+    upper.startsWith("ROLLBACK_REAL_FILE")
+  ) {
+    return handleRollbackFile(message);
+  }
+
+  if (
+    upper.startsWith("EXECUTE_ROLLBACK") ||
+    upper.startsWith("EXECUTE_ROLLBACK_FILE")
+  ) {
+    return handleExecuteRollbackFile(message);
+  }
+
+  if (
+    upper.startsWith("GENERATE_PATCH") ||
+    upper.startsWith("CREATE_PATCH")
+  ) {
+    return handleGeneratePatch(message);
+  }
+
+  if (
+    upper.startsWith("SEARCH_FILES") ||
+    upper.startsWith("FIND_FILES")
+  ) {
+    return handleSearchFiles(message);
+  }
+
+  if (
+    upper.startsWith("SEARCH_INSIDE_FILES") ||
+    upper.startsWith("SEARCH_INSIDE_FILE") ||
+    upper.startsWith("SEARCH_INSIDE") ||
+    upper.startsWith("SEARCH_CODE")
+  ) {
+    return handleSearchInsideFiles(message);
+  }
+
+  return response("CODE_TOOL", "needs_attention", {
+    status: "needs_attention",
+    reason: "Unknown code tool command",
+    message,
+    supportedCommands: [
+      "LIST_FILES: app",
+      "READ_REAL_FILE: app/file.ts",
+      "ANALYZE_REAL_FILE: app/file.ts",
+      "WRITE_FILE: app/file.ts",
+      "PATCH_FILE: app/file.ts",
+      "EXECUTE_WRITE_FILE: pending_action_id",
+      "EXECUTE_PATCH_FILE: pending_action_id",
+      "ROLLBACK_FILE: app/file.ts",
+      "EXECUTE_ROLLBACK_FILE: pending_action_id",
+      "GENERATE_PATCH: app/file.ts",
+      "SEARCH_FILES: query",
+      "SEARCH_INSIDE_FILES: query",
+    ],
+  });
+}
+
+export const handleCodeCommand = handleCodeToolCommand;
+
+export default handleCodeToolCommand;

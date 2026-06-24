@@ -51,6 +51,46 @@ type AweniaRequestBody = {
   sessionId?: string;
 };
 
+const CODE_TOOL_COMMANDS = [
+  "LIST_FILES",
+  "LIST_PROJECT_FILES",
+
+  "READ_FILE",
+  "READ_REAL_FILE",
+
+  "ANALYZE_FILE",
+  "ANALYZE_REAL_FILE",
+
+  "WRITE_FILE",
+  "WRITE_REAL_FILE",
+
+  "PATCH_FILE",
+  "PATCH_REAL_FILE",
+
+  "EXECUTE_WRITE",
+  "EXECUTE_WRITE_FILE",
+
+  "EXECUTE_PATCH",
+  "EXECUTE_PATCH_FILE",
+
+  "ROLLBACK_FILE",
+  "ROLLBACK_REAL_FILE",
+
+  "EXECUTE_ROLLBACK",
+  "EXECUTE_ROLLBACK_FILE",
+
+  "GENERATE_PATCH",
+  "CREATE_PATCH",
+
+  "SEARCH_FILES",
+  "FIND_FILES",
+
+  "SEARCH_INSIDE",
+  "SEARCH_INSIDE_FILE",
+  "SEARCH_INSIDE_FILES",
+  "SEARCH_CODE",
+];
+
 function now() {
   return new Date().toISOString();
 }
@@ -110,22 +150,20 @@ function getSafeSimpleReply(message: string) {
   }
 }
 
-function detectCodeToolCommand(message: string) {
-  const upper = message.trim().toUpperCase();
+function commandMatches(message: string, command: string) {
+  const upper = String(message || "").trim().toUpperCase();
+  const normalizedCommand = command.trim().toUpperCase();
 
   return (
-    upper.startsWith("LIST_FILES") ||
-    upper.startsWith("READ_FILE:") ||
-    upper.startsWith("READ_REAL_FILE:") ||
-    upper.startsWith("ANALYZE_FILE:") ||
-    upper.startsWith("ANALYZE_REAL_FILE:") ||
-    upper.startsWith("WRITE_FILE:") ||
-    upper.startsWith("PATCH_FILE:") ||
-    upper.startsWith("EXECUTE_WRITE:") ||
-    upper.startsWith("EXECUTE_PATCH:") ||
-    upper.startsWith("ROLLBACK_FILE:") ||
-    upper.startsWith("SEARCH_CODE:") ||
-    upper.startsWith("SEARCH_INSIDE:")
+    upper === normalizedCommand ||
+    upper.startsWith(`${normalizedCommand}:`) ||
+    upper.startsWith(`${normalizedCommand} `)
+  );
+}
+
+function detectCodeToolCommand(message: string) {
+  return CODE_TOOL_COMMANDS.some((command) =>
+    commandMatches(message, command)
   );
 }
 
@@ -150,6 +188,12 @@ async function handleCodeToolCommand(message: string) {
         "Gabi, code-tools-handler există, dar nu am găsit funcția de comandă potrivită.",
       status: "failed",
       verified: true,
+      expectedExports: [
+        "handleCodeToolCommand",
+        "handleCodeCommand",
+        "default",
+      ],
+      timestamp: now(),
     },
     500
   );
@@ -260,10 +304,11 @@ async function buildAweniaMessages(input: {
   cognitionRuntime: any;
 }) {
   const filesContext = buildFilesContext(input.files);
+  const activeSkill = input.skill?.skill || "general";
 
   const systemPrompt = buildSystemPrompt({
     mode: "chat",
-    skill: input.skill?.skill || input.skill?.skill || "general",
+    skill: activeSkill,
     extraContext: [
       "Reguli importante:",
       "- Răspunde în română pentru Gabi.",
@@ -288,9 +333,7 @@ async function buildAweniaMessages(input: {
     ].join("\n"),
   } as any);
 
-  const skillContext = buildSkillContext(
-    input.skill?.skill || input.skill?.skill || "general"
-  );
+  const skillContext = buildSkillContext(activeSkill);
 
   const userContent = [
     input.message,
@@ -446,7 +489,7 @@ export async function POST(request: NextRequest) {
 
       cognitionRuntime = await runCognitionRuntime({
         message,
-        activeSkill: skill?.skill || skill?.skill || "general",
+        activeSkill: skill?.skill || "general",
         pendingEvolutionCount: 0,
         mode: "light",
         includeInternet: false,
@@ -563,8 +606,12 @@ export async function GET() {
       "CHECK_SUPABASE_SYSTEM",
       "CHECK_INTERNET_SYSTEM",
       "RUN_AUTONOMOUS_TESTS",
-      "LIST_FILES",
+      "LIST_FILES: app",
       "READ_REAL_FILE: app/api/awenia/route.ts",
+      "ANALYZE_REAL_FILE: app/code-tools-handler.ts",
+      "GENERATE_PATCH: app/code-tools-handler.ts",
+      "PATCH_FILE: app/file.ts",
+      "EXECUTE_PATCH_FILE: pending_action_id",
     ],
     truthPolicy: {
       routeRespondingIsNotFullSystemHealth: true,
