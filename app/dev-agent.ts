@@ -64,7 +64,14 @@ export type DevAgentPatchResult = {
 
 const PROJECT_ROOT = process.cwd();
 
-const BLOCKED_PATHS = [
+const READ_BLOCKED_PATHS = [
+  ".env",
+  ".env.local",
+  ".git",
+  "node_modules",
+];
+
+const WRITE_BLOCKED_PATHS = [
   ".env",
   ".env.local",
   ".git",
@@ -162,8 +169,11 @@ function pathMatchesRule(filePath: string, rulePath: string) {
   );
 }
 
-function isBlockedPath(filePath: string) {
-  return BLOCKED_PATHS.some((blocked) =>
+function isBlockedPath(filePath: string, action: DevAgentAction) {
+  const blockedPaths =
+    action === "read" ? READ_BLOCKED_PATHS : WRITE_BLOCKED_PATHS;
+
+  return blockedPaths.some((blocked) =>
     pathMatchesRule(filePath, blocked)
   );
 }
@@ -205,9 +215,10 @@ function detectRisk(
   action: DevAgentAction
 ): DevAgentRisk {
   if (hasPathTraversal(filePath)) return "critical";
-  if (isBlockedPath(filePath)) return "critical";
+  if (isBlockedPath(filePath, action)) return "critical";
   if (action === "delete") return "critical";
   if (isHighRiskPath(filePath)) return "high";
+
   if (
     action === "write" ||
     action === "patch" ||
@@ -282,12 +293,15 @@ export function validateProjectFilePath(
     };
   }
 
-  if (isBlockedPath(normalizedPath)) {
+  if (isBlockedPath(normalizedPath, action)) {
     return {
       allowed: false,
       blocked: true,
       risk: "critical",
-      reason: "Protected path is blocked",
+      reason:
+        action === "read"
+          ? "Protected path cannot be read"
+          : "Protected path cannot be modified",
       normalizedPath,
       absolutePath,
       requiresApproval: true,
@@ -313,7 +327,7 @@ export function validateProjectFilePath(
     reason: "Path validated",
     normalizedPath,
     absolutePath,
-    requiresApproval: risk !== "low",
+    requiresApproval: action === "read" ? false : risk !== "low",
   };
 }
 
@@ -588,16 +602,22 @@ export async function listProjectFilesDetailed(
   const result: DevAgentFileInfo[] = [];
 
   for (const filePath of files) {
-    const validation = validateProjectFilePath(filePath, "read");
+    try {
+      const validation = validateProjectFilePath(filePath, "read");
 
-    const stat = await fs.stat(validation.absolutePath);
+      if (!validation.allowed) continue;
 
-    result.push({
-      filePath,
-      size: stat.size,
-      extension: getFileExtension(filePath),
-      modifiedAt: stat.mtime.toISOString(),
-    });
+      const stat = await fs.stat(validation.absolutePath);
+
+      result.push({
+        filePath,
+        size: stat.size,
+        extension: getFileExtension(filePath),
+        modifiedAt: stat.mtime.toISOString(),
+      });
+    } catch {
+      continue;
+    }
   }
 
   return result;
@@ -717,7 +737,8 @@ export async function getDevAgentState() {
     status: "active",
     projectRoot: PROJECT_ROOT,
     fileCount: files.length,
-    blockedPaths: BLOCKED_PATHS,
+    readBlockedPaths: READ_BLOCKED_PATHS,
+    writeBlockedPaths: WRITE_BLOCKED_PATHS,
     highRiskPaths: HIGH_RISK_PATHS,
     allowedExtensions: ALLOWED_EXTENSIONS,
     rules: {
@@ -725,6 +746,7 @@ export async function getDevAgentState() {
       blocksGit: true,
       blocksNodeModules: true,
       blocksPathTraversal: true,
+      protectedCoreCanBeReadButNotModified: true,
       createsBackupsBeforeWrite: true,
       requiresExplicitGabiApprovalForWritePatchRollback: true,
       rejectsAmbiguousPatches: true,
