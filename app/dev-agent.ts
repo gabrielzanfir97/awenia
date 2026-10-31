@@ -62,13 +62,15 @@ export type DevAgentPatchResult = {
   timestamp: string;
 };
 
-const PROJECT_ROOT = process.cwd();
+const PROJECT_ROOT = path.resolve(process.cwd());
+const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024;
 
 const READ_BLOCKED_PATHS = [
   ".env",
   ".env.local",
   ".git",
   "node_modules",
+  ".next",
 ];
 
 const WRITE_BLOCKED_PATHS = [
@@ -76,6 +78,7 @@ const WRITE_BLOCKED_PATHS = [
   ".env.local",
   ".git",
   "node_modules",
+  ".next",
   "app/protected-core.ts",
 ];
 
@@ -88,6 +91,11 @@ const HIGH_RISK_PATHS = [
   "app/pending-actions.ts",
   "app/security.ts",
   "app/protected-core.ts",
+  "app/code-tools-handler.ts",
+  "app/patch-generator.ts",
+  "app/rollback.ts",
+  "app/code-memory.ts",
+  "app/system-tools-handler.ts",
 ];
 
 const ALLOWED_EXTENSIONS = [
@@ -107,12 +115,16 @@ function now() {
 }
 
 function normalizeProjectPath(filePath = "") {
-  return String(filePath)
+  const raw = String(filePath || "")
     .replace(/\\/g, "/")
     .replace(/\/+/g, "/")
-    .replace(/^\.\//, "")
-    .replace(/^\/+/, "")
     .trim();
+  if (!raw) return "";
+
+  // Canonicalize repeated ./ and internal /./ segments before matching rules.
+  // This prevents equivalent paths from bypassing protected-file checks.
+  const canonicalPath: string = path.posix.normalize(raw);
+  return canonicalPath.replace(/^\/+/, "").replace(/^\.\//, "");
 }
 
 function normalizeRulePath(filePath = "") {
@@ -122,51 +134,43 @@ function normalizeRulePath(filePath = "") {
 }
 
 function hasPathTraversal(filePath = "") {
-  const normalized = normalizeProjectPath(filePath);
+  const raw = String(filePath || "").trim();
+  const slashPath = raw.replace(/\\/g, "/");
+  const parts = slashPath.split("/");
 
   return (
-    normalized === ".." ||
-    normalized.startsWith("../") ||
-    normalized.includes("/../") ||
-    path.isAbsolute(filePath) ||
-    /^[a-zA-Z]:\//.test(normalized)
+    raw.includes("\0") ||
+    raw.startsWith("/") ||
+    slashPath.startsWith("/") ||
+    /^[a-zA-Z]:/.test(slashPath) ||
+    path.isAbsolute(raw) ||
+    parts.includes("..")
   );
 }
 
 function isInsideProjectRoot(absolutePath: string) {
   const relative = path.relative(PROJECT_ROOT, absolutePath);
-
   return (
     relative === "" ||
-    (!relative.startsWith("..") && !path.isAbsolute(relative))
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
   );
 }
 
 function pathMatchesRule(filePath: string, rulePath: string) {
   const normalized = normalizeRulePath(filePath);
   const rule = normalizeRulePath(rulePath);
-
   if (!normalized || !rule) return false;
 
   const segments = normalized.split("/");
-
   if (rule.startsWith(".")) {
-    return segments.some(
-      (segment) =>
-        segment === rule ||
-        segment.startsWith(`${rule}.`)
-    );
+    // Includes .env.local, .env.production, .gitignore, etc.
+    return segments.some((segment) => segment === rule || segment.startsWith(`${rule}.`));
   }
 
-  if (rule === "node_modules" || rule === ".git") {
-    return segments.includes(rule);
-  }
-
-  return (
-    normalized === rule ||
-    normalized.startsWith(`${rule}/`) ||
-    normalized.startsWith(`${rule}.`)
-  );
+  if (rule === "node_modules") return segments.includes(rule);
+  return normalized === rule || normalized.startsWith(`${rule}/`);
 }
 
 function isBlockedPath(filePath: string, action: DevAgentAction) {
@@ -199,15 +203,7 @@ function isAllowedExtension(filePath: string) {
 function resolveProjectPath(filePath: string) {
   const normalizedPath = normalizeProjectPath(filePath);
   const absolutePath = path.resolve(PROJECT_ROOT, normalizedPath || ".");
-
-  if (!isInsideProjectRoot(absolutePath)) {
-    throw new Error("Path is outside project root");
-  }
-
-  return {
-    normalizedPath,
-    absolutePath,
-  };
+  return { normalizedPath, absolutePath };
 }
 
 function detectRisk(
@@ -234,12 +230,17 @@ function assertWriteApproval(
   validation: DevAgentValidation,
   options?: DevAgentApprovalOptions
 ) {
+  if (!validation.allowed) throw new Error(validation.reason);
+
+  // The code tool handler checks the persisted approval before it calls dev-agent.
+  // This also rejects accidental direct calls without an approval context.
   if (
-    validation.requiresApproval &&
-    options?.approvedByGabi !== true
+    options?.approvedByGabi !== true ||
+    options?.approvedBy !== "Gabi" ||
+    !String(options?.pendingActionId || "").trim()
   ) {
     throw new Error(
-      "Dev-agent write/patch/rollback requires explicit Gabi approval through an approved pending action."
+      "Write/patch/rollback requires Gabi approval and an approved pending action ID."
     );
   }
 }
@@ -267,59 +268,37 @@ export function validateProjectFilePath(
   action: DevAgentAction = "read"
 ): DevAgentValidation {
   const { normalizedPath, absolutePath } = resolveProjectPath(filePath);
-  const risk = detectRisk(normalizedPath, action);
 
-  if (!normalizedPath) {
-    return {
-      allowed: false,
-      blocked: true,
-      risk: "critical",
-      reason: "Missing file path",
-      normalizedPath,
-      absolutePath,
-      requiresApproval: true,
-    };
+  const blocked = (reason: string, risk: DevAgentRisk = "critical") => ({
+    allowed: false,
+    blocked: true,
+    risk,
+    reason,
+    normalizedPath,
+    absolutePath,
+    requiresApproval: true,
+  });
+
+  if (!normalizedPath) return blocked("Missing file path");
+  if (hasPathTraversal(filePath) || !isInsideProjectRoot(absolutePath)) {
+    return blocked("Absolute paths and path traversal are blocked");
   }
-
-  if (hasPathTraversal(normalizedPath)) {
-    return {
-      allowed: false,
-      blocked: true,
-      risk: "critical",
-      reason: "Path traversal is blocked",
-      normalizedPath,
-      absolutePath,
-      requiresApproval: true,
-    };
+  if (action === "delete") return blocked("Delete operations are disabled");
+  if (action !== "read" && normalizedPath === ".") {
+    return blocked("Cannot modify the project root directory");
   }
-
   if (isBlockedPath(normalizedPath, action)) {
-    return {
-      allowed: false,
-      blocked: true,
-      risk: "critical",
-      reason:
-        action === "read"
-          ? "Protected path cannot be read"
-          : "Protected path cannot be modified",
-      normalizedPath,
-      absolutePath,
-      requiresApproval: true,
-    };
+    return blocked(
+      action === "read"
+        ? "Protected path cannot be read"
+        : "Protected path cannot be modified"
+    );
   }
-
   if (!isAllowedExtension(normalizedPath)) {
-    return {
-      allowed: false,
-      blocked: true,
-      risk: "high",
-      reason: "File extension is not allowed for dev-agent",
-      normalizedPath,
-      absolutePath,
-      requiresApproval: true,
-    };
+    return blocked("File extension is not allowed for dev-agent", "high");
   }
 
+  const risk = detectRisk(normalizedPath, action);
   return {
     allowed: true,
     blocked: false,
@@ -327,8 +306,42 @@ export function validateProjectFilePath(
     reason: "Path validated",
     normalizedPath,
     absolutePath,
-    requiresApproval: action === "read" ? false : risk !== "low",
+    requiresApproval: action !== "read",
   };
+}
+
+/** Reject symlinks in every existing path component (files AND directories). */
+async function assertNoSymlinkPath(absolutePath: string) {
+  if (!isInsideProjectRoot(absolutePath)) {
+    throw new Error("Path outside project root");
+  }
+
+  const relative = path.relative(PROJECT_ROOT, absolutePath);
+  let current = PROJECT_ROOT;
+  for (const part of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    try {
+      const stats = await fs.lstat(current);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`Symbolic links are not allowed in project file paths: ${part}`);
+      }
+    } catch (error: any) {
+      if (error?.code === "ENOENT") break;
+      throw error;
+    }
+  }
+}
+
+async function assertSafeBackupTarget(backupPath: string) {
+  await assertNoSymlinkPath(backupPath);
+  try {
+    const stats = await fs.lstat(backupPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error("Backup target is not a safe regular file");
+    }
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") throw error;
+  }
 }
 
 async function ensureParentDirectory(absolutePath: string) {
@@ -346,39 +359,34 @@ async function fileExists(absolutePath: string) {
 
 export async function createFileBackup(filePath: string) {
   const validation = validateProjectFilePath(filePath, "read");
+  if (!validation.allowed) throw new Error(validation.reason);
+  await assertNoSymlinkPath(validation.absolutePath);
+  if (!(await fileExists(validation.absolutePath))) return null;
 
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
-  const exists = await fileExists(validation.absolutePath);
-
-  if (!exists) {
-    return null;
-  }
-
+  const stats = await fs.stat(validation.absolutePath);
+  if (!stats.isFile()) throw new Error("Cannot back up a directory");
   const content = await fs.readFile(validation.absolutePath, "utf8");
 
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const uniqueSuffix = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  const archivePath = `${validation.absolutePath}.${timestamp}.${uniqueSuffix}.backup`;
+  const latestBackupPath = `${validation.absolutePath}.backup`;
 
-  const backupPath = `${validation.absolutePath}.${timestamp}.backup`;
-  const simpleBackupPath = `${validation.absolutePath}.backup`;
+  await assertSafeBackupTarget(archivePath);
+  await assertSafeBackupTarget(latestBackupPath);
+  await fs.writeFile(archivePath, content, { encoding: "utf8", flag: "wx" });
+  await fs.writeFile(latestBackupPath, content, "utf8");
 
-  await fs.writeFile(backupPath, content, "utf8");
-  await fs.writeFile(simpleBackupPath, content, "utf8");
-
-  return normalizeProjectPath(path.relative(PROJECT_ROOT, backupPath));
+  return normalizeProjectPath(path.relative(PROJECT_ROOT, archivePath));
 }
 
 export async function readProjectFile(filePath: string) {
   const validation = validateProjectFilePath(filePath, "read");
+  if (!validation.allowed) throw new Error(validation.reason);
+  await assertNoSymlinkPath(validation.absolutePath);
 
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
+  const stats = await fs.stat(validation.absolutePath);
+  if (!stats.isFile()) throw new Error("Expected a regular project file");
   return fs.readFile(validation.absolutePath, "utf8");
 }
 
@@ -388,17 +396,12 @@ export async function writeProjectFile(
   options?: DevAgentApprovalOptions
 ): Promise<DevAgentWriteResult> {
   const validation = validateProjectFilePath(filePath, "write");
-
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
   assertWriteApproval(validation, options);
+  await assertNoSymlinkPath(validation.absolutePath);
 
   const backupPath = await createFileBackup(validation.normalizedPath);
-
   await ensureParentDirectory(validation.absolutePath);
-
+  await assertNoSymlinkPath(validation.absolutePath);
   await fs.writeFile(validation.absolutePath, content, "utf8");
 
   return {
@@ -408,7 +411,7 @@ export async function writeProjectFile(
     backupPath: backupPath || undefined,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
-    approvedBy: options?.approvedBy || "Gabi",
+    approvedBy: options?.approvedBy,
     pendingActionId: options?.pendingActionId || null,
     timestamp: now(),
   };
@@ -421,17 +424,17 @@ export async function patchProjectFile(
   options?: DevAgentApprovalOptions
 ): Promise<DevAgentPatchResult> {
   const validation = validateProjectFilePath(filePath, "patch");
-
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
   assertWriteApproval(validation, options);
+  await assertNoSymlinkPath(validation.absolutePath);
 
   const currentContent = await readProjectFile(validation.normalizedPath);
   const matches = countExactMatches(currentContent, searchText);
+  if (!searchText || matches !== 1 || searchText === replacementText) {
+    let reason = "Patch would not change the file";
+    if (!searchText) reason = "Missing SEARCH text";
+    else if (matches === 0) reason = "SEARCH text not found in current file";
+    else if (matches > 1) reason = "SEARCH text is ambiguous (multiple matches)";
 
-  if (matches === 0) {
     return {
       success: false,
       action: "patch",
@@ -439,34 +442,17 @@ export async function patchProjectFile(
       changed: false,
       risk: validation.risk,
       requiresApproval: validation.requiresApproval,
-      approvedBy: options?.approvedBy || "Gabi",
+      approvedBy: options?.approvedBy,
       pendingActionId: options?.pendingActionId || null,
-      reason: "Search text was not found in current file content",
-      matches,
-      timestamp: now(),
-    };
-  }
-
-  if (matches > 1) {
-    return {
-      success: false,
-      action: "patch",
-      filePath: validation.normalizedPath,
-      changed: false,
-      risk: validation.risk,
-      requiresApproval: validation.requiresApproval,
-      approvedBy: options?.approvedBy || "Gabi",
-      pendingActionId: options?.pendingActionId || null,
-      reason: "Search text appears multiple times; patch is ambiguous",
+      reason,
       matches,
       timestamp: now(),
     };
   }
 
   const backupPath = await createFileBackup(validation.normalizedPath);
-
   const newContent = currentContent.replace(searchText, replacementText);
-
+  await assertNoSymlinkPath(validation.absolutePath);
   await fs.writeFile(validation.absolutePath, newContent, "utf8");
 
   return {
@@ -477,9 +463,9 @@ export async function patchProjectFile(
     changed: true,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
-    approvedBy: options?.approvedBy || "Gabi",
+    approvedBy: options?.approvedBy,
     pendingActionId: options?.pendingActionId || null,
-    reason: "Patch applied after exact single match validation",
+    reason: "Exactly one SEARCH match, patch applied after approval",
     matches,
     timestamp: now(),
   };
@@ -490,38 +476,37 @@ export async function rollbackProjectFile(
   options?: DevAgentApprovalOptions
 ) {
   const validation = validateProjectFilePath(filePath, "rollback");
-
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
   assertWriteApproval(validation, options);
+  await assertNoSymlinkPath(validation.absolutePath);
 
-  const backupPath = `${validation.absolutePath}.backup`;
-
-  const exists = await fileExists(backupPath);
-
-  if (!exists) {
+  const latestBackupPath = `${validation.absolutePath}.backup`;
+  await assertSafeBackupTarget(latestBackupPath);
+  if (!(await fileExists(latestBackupPath))) {
     throw new Error(`No backup found for ${validation.normalizedPath}`);
   }
 
-  const beforeRollbackBackup = await createFileBackup(
-    validation.normalizedPath
-  );
+  // Read the version to restore FIRST. createFileBackup also updates .backup.
+  const restoreContent = await fs.readFile(latestBackupPath, "utf8");
+  const currentContent = await readProjectFile(validation.normalizedPath);
+  if (currentContent === restoreContent) {
+    throw new Error("Rollback not needed: current file already matches the backup");
+  }
 
-  const backupContent = await fs.readFile(backupPath, "utf8");
-
-  await fs.writeFile(validation.absolutePath, backupContent, "utf8");
+  // Archive the current version before writing the restored one. The latest
+  // .backup becomes the pre-rollback version for a future reversible rollback.
+  const beforeRollbackBackup = await createFileBackup(validation.normalizedPath);
+  await assertNoSymlinkPath(validation.absolutePath);
+  await fs.writeFile(validation.absolutePath, restoreContent, "utf8");
 
   return {
     success: true,
-    action: "rollback",
+    action: "rollback" as const,
     filePath: validation.normalizedPath,
-    backupPath: normalizeProjectPath(path.relative(PROJECT_ROOT, backupPath)),
+    backupPath: normalizeProjectPath(path.relative(PROJECT_ROOT, latestBackupPath)),
     beforeRollbackBackup,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
-    approvedBy: options?.approvedBy || "Gabi",
+    approvedBy: options?.approvedBy,
     pendingActionId: options?.pendingActionId || null,
     timestamp: now(),
   };
@@ -531,40 +516,28 @@ async function walkDirectory(
   directoryPath: string,
   basePath = ""
 ): Promise<string[]> {
-  const entries = await fs.readdir(directoryPath, {
-    withFileTypes: true,
-  });
-
+  await assertNoSymlinkPath(directoryPath);
+  const entries = await fs.readdir(directoryPath, { withFileTypes: true });
   const files: string[] = [];
 
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
     const absoluteEntryPath = path.join(directoryPath, entry.name);
-    const relativeEntryPath = normalizeProjectPath(
-      path.join(basePath, entry.name)
-    );
-
-    const lowerRelative = relativeEntryPath.toLowerCase();
-    const parts = lowerRelative.split("/");
+    const relativeEntryPath = normalizeProjectPath(path.join(basePath, entry.name));
+    const segments = relativeEntryPath.toLowerCase().split("/");
 
     if (
-      parts.includes("node_modules") ||
-      parts.includes(".git") ||
-      parts.includes(".next")
-    ) {
-      continue;
-    }
+      segments.includes("node_modules") ||
+      segments.includes(".git") ||
+      segments.includes(".next") ||
+      isBlockedPath(relativeEntryPath, "read") ||
+      entry.name.toLowerCase().endsWith(".backup")
+    ) continue;
 
     if (entry.isDirectory()) {
-      const nestedFiles = await walkDirectory(
-        absoluteEntryPath,
-        relativeEntryPath
-      );
-
-      files.push(...nestedFiles);
-    } else {
-      if (isAllowedExtension(relativeEntryPath)) {
-        files.push(relativeEntryPath);
-      }
+      files.push(...(await walkDirectory(absoluteEntryPath, relativeEntryPath)));
+    } else if (entry.isFile() && isAllowedExtension(relativeEntryPath)) {
+      files.push(relativeEntryPath);
     }
   }
 
@@ -573,25 +546,18 @@ async function walkDirectory(
 
 export async function listProjectFiles(startDirectory = "app") {
   const validation = validateProjectFilePath(startDirectory, "read");
+  if (!validation.allowed) throw new Error(validation.reason);
+  await assertNoSymlinkPath(validation.absolutePath);
+  if (!(await fileExists(validation.absolutePath))) return [];
 
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
-  const exists = await fileExists(validation.absolutePath);
-
-  if (!exists) return [];
-
-  const stat = await fs.stat(validation.absolutePath);
-
-  if (stat.isFile()) {
-    return [validation.normalizedPath];
-  }
-
-  return walkDirectory(
+  const stats = await fs.stat(validation.absolutePath);
+  if (stats.isFile()) return [validation.normalizedPath];
+  if (!stats.isDirectory()) return [];
+  const files = await walkDirectory(
     validation.absolutePath,
     validation.normalizedPath === "." ? "" : validation.normalizedPath
   );
+  return files.sort((a, b) => a.localeCompare(b));
 }
 
 export async function listProjectFilesDetailed(
@@ -625,13 +591,9 @@ export async function listProjectFilesDetailed(
 
 export async function getProjectFileSnapshot(filePath: string) {
   const validation = validateProjectFilePath(filePath, "read");
-
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
+  if (!validation.allowed) throw new Error(validation.reason);
+  await assertNoSymlinkPath(validation.absolutePath);
   const exists = await fileExists(validation.absolutePath);
-
   if (!exists) {
     return {
       exists: false,
@@ -642,17 +604,17 @@ export async function getProjectFileSnapshot(filePath: string) {
     };
   }
 
-  const stat = await fs.stat(validation.absolutePath);
+  const stats = await fs.stat(validation.absolutePath);
+  if (!stats.isFile()) throw new Error("Expected a regular project file");
   const content = await fs.readFile(validation.absolutePath, "utf8");
-
   return {
     exists: true,
     filePath: validation.normalizedPath,
-    size: stat.size,
+    size: stats.size,
     extension: getFileExtension(validation.normalizedPath),
-    modifiedAt: stat.mtime.toISOString(),
+    modifiedAt: stats.mtime.toISOString(),
     preview: content.slice(0, 2000),
-    lineCount: content.split("\n").length,
+    lineCount: content.replace(/\r\n/g, "\n").split("\n").length,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
     timestamp: now(),
@@ -667,14 +629,15 @@ export async function analyzeProjectFileSafety(filePath: string) {
     filePath: readValidation.normalizedPath,
     canRead: readValidation.allowed,
     canWrite: writeValidation.allowed,
-    canWriteWithoutApproval:
-      writeValidation.allowed && !writeValidation.requiresApproval,
-    canWriteWithApproval:
-      writeValidation.allowed && writeValidation.requiresApproval,
+    canWriteWithoutApproval: false,
+    canWriteWithApproval: writeValidation.allowed && writeValidation.requiresApproval,
     readRisk: readValidation.risk,
     writeRisk: writeValidation.risk,
     requiresApproval: writeValidation.requiresApproval,
-    blocked: readValidation.blocked || writeValidation.blocked,
+    // `blocked` describes read-access: a protected file may be readable but not writable.
+    blocked: readValidation.blocked,
+    readBlocked: readValidation.blocked,
+    writeBlocked: writeValidation.blocked,
     reasons: [readValidation.reason, writeValidation.reason],
     timestamp: now(),
   };
@@ -700,26 +663,24 @@ export async function searchInsideProjectFiles(
   limit = 20
 ) {
   const files = await listProjectFiles(startDirectory);
-  const lowerQuery = query.toLowerCase().trim();
-  const matches: any[] = [];
-
-  if (!lowerQuery) return [];
+  const lowerQuery = String(query || "").toLowerCase().trim();
+  const matches: { filePath: string; preview: string }[] = [];
+  if (!lowerQuery) return matches;
 
   for (const filePath of files) {
     if (matches.length >= limit) break;
-
     try {
-      const content = await readProjectFile(filePath);
-      const lowerContent = content.toLowerCase();
-      const foundAt = lowerContent.indexOf(lowerQuery);
-
+      const validation = validateProjectFilePath(filePath, "read");
+      if (!validation.allowed) continue;
+      await assertNoSymlinkPath(validation.absolutePath);
+      const stat = await fs.stat(validation.absolutePath);
+      if (!stat.isFile() || stat.size > MAX_SEARCH_FILE_BYTES) continue;
+      const content = await fs.readFile(validation.absolutePath, "utf8");
+      const foundAt = content.toLowerCase().indexOf(lowerQuery);
       if (foundAt !== -1) {
         matches.push({
           filePath,
-          preview: content.slice(
-            Math.max(0, foundAt - 200),
-            foundAt + 500
-          ),
+          preview: content.slice(Math.max(0, foundAt - 200), foundAt + 500),
         });
       }
     } catch {
@@ -732,7 +693,6 @@ export async function searchInsideProjectFiles(
 
 export async function getDevAgentState() {
   const files = await listProjectFiles("app");
-
   return {
     status: "active",
     projectRoot: PROJECT_ROOT,
@@ -746,16 +706,20 @@ export async function getDevAgentState() {
       blocksGit: true,
       blocksNodeModules: true,
       blocksPathTraversal: true,
+      blocksSymlinks: true,
       protectedCoreCanBeReadButNotModified: true,
       createsBackupsBeforeWrite: true,
       requiresExplicitGabiApprovalForWritePatchRollback: true,
+      requiresPendingActionIdForWritePatchRollback: true,
       rejectsAmbiguousPatches: true,
       requiresApprovalForMediumHighCriticalRisk: true,
+      rollbackPreservesVersionToRestore: true,
     },
     truthPolicy: {
       readOperationsDoNotModifyFiles: true,
       writePatchRollbackRequireApproval: true,
       backupsCreatedBeforeWritePatchRollback: true,
+      approvalStatusCheckedByCallingHandler: true,
     },
     timestamp: now(),
   };

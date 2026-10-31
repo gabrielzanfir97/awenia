@@ -58,6 +58,7 @@ export type ProjectMapState = {
     mapDoesNotConfirmFileExists: boolean;
     filesystemMustBeCheckedSeparately: boolean;
     buildStatusMustBeCheckedSeparately: boolean;
+    declaredModuleStatusIsNotVerifiedHealth?: boolean;
   };
   timestamp: string;
 };
@@ -67,7 +68,28 @@ function now() {
 }
 
 function normalizePath(filePath = "") {
-  return filePath.replace(/\\/g, "/").trim().replace(/^\/+/, "");
+  return String(filePath || "")
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .trim()
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+}
+
+function pathKey(filePath: string) {
+  return normalizePath(filePath).toLowerCase();
+}
+
+const RISK_ORDER: Record<ProjectModuleRisk, number> = {
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4,
+};
+
+function higherRisk(a: ProjectModuleRisk, b: ProjectModuleRisk): ProjectModuleRisk {
+  return RISK_ORDER[a] >= RISK_ORDER[b] ? a : b;
 }
 
 function unique(values: string[]) {
@@ -113,7 +135,7 @@ export const PROJECT_MODULES: ProjectModule[] = [
     id: "main_api",
     category: "api",
     name: "Main API Route",
-    files: ["app/api/awenia/route.ts"],
+    files: ["app/api/awenia/route.ts", "app/api/test-local/route.ts"],
     purpose:
       "Route-ul principal care primește mesajele, rulează tool-uri, citește memoria și cheamă AI-ul local.",
     status: "high_risk",
@@ -136,7 +158,7 @@ export const PROJECT_MODULES: ProjectModule[] = [
     id: "ui",
     category: "ui",
     name: "Chat UI",
-    files: ["app/page.tsx", "app/layout.tsx", "app/ui.tsx"],
+    files: ["app/page.tsx", "app/layout.tsx", "app/ui.tsx", "app/globals.css"],
     purpose:
       "Interfața de chat Awenia, upload fișiere, afișare mesaje și UI Next.js.",
     status: "declared",
@@ -159,6 +181,9 @@ export const PROJECT_MODULES: ProjectModule[] = [
       "app/chat-history.ts",
       "app/memory-intent.ts",
       "app/embeddings.ts",
+      "app/permanent-memory.ts",
+      "app/memory-ranking.ts",
+      "app/reflections.ts",
     ],
     purpose:
       "Memorie locală, memorie Supabase, rezumate, chat history, embeddings și intenții de memorie.",
@@ -236,6 +261,7 @@ export const PROJECT_MODULES: ProjectModule[] = [
       "app/patch-generator.ts",
       "app/rollback.ts",
       "app/pending-actions.ts",
+      "app/sandbox.ts",
     ],
     purpose:
       "Citire fișiere, scriere, patch, rollback, backup și acțiuni pending cu aprobare.",
@@ -290,6 +316,8 @@ export const PROJECT_MODULES: ProjectModule[] = [
       "app/skills.ts",
       "app/task-planner.ts",
       "app/tasks.ts",
+      "app/skill-instructions.ts",
+      "app/planning.ts",
     ],
     purpose:
       "Detectează ruta mesajului, skill-ul, intentul, planul și decide dacă se folosește AI, tool sau răspuns simplu.",
@@ -431,6 +459,8 @@ export const PROJECT_MODULES: ProjectModule[] = [
       "app/autonomous-loop.ts",
       "app/autonomous-testing.ts",
       "app/cognition-runtime.ts",
+      "app/evolution.ts",
+      "app/upgrade-suggestions.ts",
     ],
     purpose:
       "Coordonează self-improvement, runtime autonom, evolution, worker, loop și teste autonome.",
@@ -513,6 +543,7 @@ export const PROJECT_MODULES: ProjectModule[] = [
       "app/project-map.ts",
       "app/project-state.ts",
       "app/system-tools-handler.ts",
+      "app/awenia-audit.ts",
     ],
     purpose:
       "Hartă declarată a proiectului, status proiect și handlers pentru status/teste/background.",
@@ -539,7 +570,7 @@ export const PROJECT_MODULES: ProjectModule[] = [
     id: "testing_debug",
     category: "testing",
     name: "Testing and Debug",
-    files: ["app/autonomous-testing.ts", "app/self-debug.ts"],
+    files: ["app/autonomous-testing.ts", "app/self-debug.ts", "app/test-local.ts"],
     purpose:
       "Teste autonome și analiză de erori.",
     status: "connected",
@@ -623,6 +654,7 @@ export function getProjectMap(): ProjectMapState {
       mapDoesNotConfirmFileExists: true,
       filesystemMustBeCheckedSeparately: true,
       buildStatusMustBeCheckedSeparately: true,
+      declaredModuleStatusIsNotVerifiedHealth: true,
     },
     timestamp: now(),
   };
@@ -644,16 +676,19 @@ export function getProjectModuleById(id: string) {
   return PROJECT_MODULES.find((module) => module.id === id) || null;
 }
 
-export function getProjectModuleForFile(filePath: string) {
-  const normalized = normalizePath(filePath).toLowerCase();
+/** Lists every declared module for a file, including shared-module memberships. */
+export function getProjectModulesForFile(filePath: string): ProjectModule[] {
+  const target = pathKey(filePath);
+  if (!target) return [];
 
-  return (
-    PROJECT_MODULES.find((module) =>
-      module.files.some(
-        (file) => normalizePath(file).toLowerCase() === normalized
-      )
-    ) || null
+  return PROJECT_MODULES.filter((module) =>
+    module.files.some((file) => pathKey(file) === target)
   );
+}
+
+/** Preserved for compatibility: returns the first matching declared module. */
+export function getProjectModuleForFile(filePath: string) {
+  return getProjectModulesForFile(filePath)[0] || null;
 }
 
 export function getProjectModulesByCategory(
@@ -703,28 +738,32 @@ export function searchProjectMap(query = "") {
 
 export function analyzeProjectFile(filePath: string) {
   const normalized = normalizePath(filePath);
-  const module = getProjectModuleForFile(normalized);
+  const modules = getProjectModulesForFile(normalized);
+  const module = modules[0] || null;
 
-  const risk: ProjectModuleRisk =
-    CRITICAL_FILES.includes(normalized)
-      ? "critical"
-      : HIGH_RISK_FILES.includes(normalized)
-        ? "high"
-        : module?.risk || "medium";
+  // An overlapping file inherits the highest declared risk, not the first one.
+  const risk: ProjectModuleRisk = modules.length
+    ? modules.reduce<ProjectModuleRisk>(
+      (current, entry) => higherRisk(current, entry.risk),
+      "low"
+    )
+    : "medium";
 
   return {
     filePath: normalized,
-    knownInMap: Boolean(module),
+    knownInMap: modules.length > 0,
     module,
+    modules,
+    moduleIds: modules.map((entry) => entry.id),
     risk,
-    requiresApproval:
-      risk === "medium" || risk === "high" || risk === "critical",
+    requiresApproval: risk !== "low",
     note: module
       ? module.purpose
       : "Fișierul nu este în harta declarată. Trebuie verificat separat.",
     truthPolicy: {
       mapDoesNotConfirmFileExists: true,
       mustReadFileForRealContent: true,
+      listedStatusDoesNotVerifyRuntime: true,
     },
     timestamp: now(),
   };
@@ -817,6 +856,15 @@ export function getProjectDependencies(moduleId: string) {
     status: "loaded",
     moduleId,
     dependsOn: module.dependsOn,
+    resolvedModuleIds: unique(
+      module.dependsOn
+        .map(resolveDeclaredDependency)
+        .filter((id): id is string => Boolean(id))
+    ),
+    unresolvedDependencies: module.dependsOn.filter(
+      (dependency) => !resolveDeclaredDependency(dependency)
+    ),
+    truthPolicy: { dependenciesAreDeclaredNotVerifiedImports: true },
     timestamp: now(),
   };
 }
@@ -830,10 +878,248 @@ export function getProjectRiskSummary() {
     {} as Record<ProjectModuleRisk, number>
   );
 
+  const fileSummary: Record<ProjectModuleRisk, number> = {
+    low: 0,
+    medium: 0,
+    high: 0,
+    critical: 0,
+  };
+  for (const file of getProjectFiles()) {
+    fileSummary[analyzeProjectFile(file).risk] += 1;
+  }
+
   return {
     summary,
+    fileSummary,
     highRiskFiles: HIGH_RISK_FILES,
     criticalFiles: CRITICAL_FILES,
+    truthPolicy: { declaredRiskOnly: true, noRuntimeVerification: true },
+    timestamp: now(),
+  };
+}
+
+
+/**
+ * Map terminology from the legacy dependsOn fields to declared module IDs.
+ * These are architecture hints, NOT verified imports or runtime connections.
+ */
+const DECLARED_DEPENDENCY_ALIASES: Record<string, string> = {
+  api: "main_api",
+  "awenia-core": "awenia_core",
+  routing: "routing_orchestration",
+  orchestrator: "routing_orchestration",
+  skills: "routing_orchestration",
+  "intent-router": "routing_orchestration",
+  security: "security_layer",
+  "memory-store": "memory_system",
+  "long-term-memory": "memory_system",
+  "code-memory": "code_memory",
+  "code-tools-handler": "code_memory",
+  "dev-agent": "dev_tools",
+  "pending-actions": "dev_tools",
+  embeddings: "memory_system",
+  "system-tools-handler": "project_awareness",
+  "cognition-runtime": "autonomy_runtime",
+  "autonomous-testing": "testing_debug",
+  "agent-orchestrator": "agents",
+  awareness: "awareness_consciousness",
+  "decision-engine": "awareness_consciousness",
+  personality: "awenia_core",
+  prompts: "awenia_core",
+  supabase: "supabase",
+  "omniscient-cognition": "cognition_layers",
+};
+
+function resolveDeclaredDependency(dependency: string): string | null {
+  const normalized = String(dependency || "").trim().toLowerCase();
+  if (!normalized) return null;
+
+  const direct = PROJECT_MODULES.find(
+    (module) => module.id.toLowerCase() === normalized
+  );
+  if (direct) return direct.id;
+
+  const aliased = DECLARED_DEPENDENCY_ALIASES[normalized];
+  if (aliased && PROJECT_MODULES.some((module) => module.id === aliased)) {
+    return aliased;
+  }
+
+  const byFile = PROJECT_MODULES.find((module) =>
+    module.files.some((file) => {
+      const entry = pathKey(file);
+      return (
+        entry === normalized ||
+        entry === `app/${normalized}.ts` ||
+        entry === `app/${normalized}.tsx`
+      );
+    })
+  );
+  return byFile?.id || null;
+}
+
+/** A graph of declared dependencies; does not inspect import statements. */
+export function getProjectDependencyGraph() {
+  const nodes = PROJECT_MODULES.map((module) => {
+    const resolvedDependencies = unique(
+      module.dependsOn
+        .map(resolveDeclaredDependency)
+        .filter((id): id is string => Boolean(id))
+    );
+    const unresolvedDependencies = module.dependsOn.filter(
+      (dependency) => !resolveDeclaredDependency(dependency)
+    );
+
+    return {
+      id: module.id,
+      name: module.name,
+      category: module.category,
+      risk: module.risk,
+      declaredStatus: module.status,
+      declaredDependencies: [...module.dependsOn],
+      resolvedDependencies,
+      unresolvedDependencies,
+    };
+  });
+
+  return {
+    status: "loaded" as const,
+    nodes,
+    edges: nodes.flatMap((node) =>
+      node.resolvedDependencies.map((dependencyId) => ({
+        from: node.id,
+        to: dependencyId,
+        source: "declared" as const,
+      }))
+    ),
+    unresolvedCount: nodes.reduce(
+      (sum, node) => sum + node.unresolvedDependencies.length,
+      0
+    ),
+    truthPolicy: {
+      dependencyEdgesAreDeclaredOnly: true,
+      runtimeImportsNotVerified: true,
+    },
+    timestamp: now(),
+  };
+}
+
+/**
+ * Impact approximation based on declared dependency links.
+ * It cannot replace an import scan, type check, build, or test run.
+ */
+export function analyzeProjectChangeImpact(filePath: string) {
+  const normalized = normalizePath(filePath);
+  const directModules = getProjectModulesForFile(normalized);
+  const graph = getProjectDependencyGraph();
+  const directlyAffectedIds = new Set(directModules.map((module) => module.id));
+  const impactedIds = new Set(directlyAffectedIds);
+  const queue = [...directlyAffectedIds];
+
+  while (queue.length) {
+    const changedId = queue.shift()!;
+    for (const edge of graph.edges) {
+      if (edge.to === changedId && !impactedIds.has(edge.from)) {
+        impactedIds.add(edge.from);
+        queue.push(edge.from);
+      }
+    }
+  }
+
+  const affectedModules = PROJECT_MODULES.filter((module) =>
+    impactedIds.has(module.id)
+  );
+
+  return {
+    status: "analyzed" as const,
+    filePath: normalized,
+    knownInMap: directModules.length > 0,
+    directModuleIds: [...directlyAffectedIds],
+    potentiallyAffectedModuleIds: [...impactedIds].filter(
+      (id) => !directlyAffectedIds.has(id)
+    ),
+    potentiallyAffectedFiles: unique(
+      affectedModules.flatMap((module) => module.files)
+    ).sort(),
+    risk: analyzeProjectFile(normalized).risk,
+    truthPolicy: {
+      basedOnlyOnDeclaredDependencies: true,
+      actualImportsAndBuildNotVerified: true,
+    },
+    timestamp: now(),
+  };
+}
+
+/** Compares caller-provided filesystem paths to the declared map. */
+export function compareProjectMapWithFiles(filesFromFilesystem: string[]) {
+  const supplied = unique(
+    (Array.isArray(filesFromFilesystem) ? filesFromFilesystem : [])
+      .map((file) => normalizePath(String(file)))
+      .filter(Boolean)
+  );
+  const declared = getProjectFiles();
+  const suppliedKeys = new Set(supplied.map(pathKey));
+  const declaredKeys = new Set(declared.map(pathKey));
+
+  const matchedFiles = declared.filter((file) => suppliedKeys.has(pathKey(file)));
+  const missingDeclaredFiles = declared.filter(
+    (file) => !suppliedKeys.has(pathKey(file))
+  );
+  const unlistedFiles = supplied.filter((file) => !declaredKeys.has(pathKey(file)));
+  const modulesWithMissingFiles = PROJECT_MODULES.filter((module) =>
+    module.files.some((file) => !suppliedKeys.has(pathKey(file)))
+  ).map((module) => module.id);
+
+  return {
+    status: "compared" as const,
+    suppliedFiles: supplied.length,
+    declaredFiles: declared.length,
+    matchedFiles,
+    missingDeclaredFiles,
+    unlistedFiles,
+    modulesWithMissingFiles,
+    truthPolicy: {
+      comparedAgainstCallerProvidedFileList: true,
+      inputListWasNotVerifiedHere: true,
+      fileContentAndBuildNotVerified: true,
+    },
+    timestamp: now(),
+  };
+}
+
+/** Validates the declaration itself; overlapping file assignments are informational. */
+export function validateProjectMapDeclaration() {
+  const ids = PROJECT_MODULES.map((module) => module.id);
+  const duplicateModuleIds = unique(ids.filter((id, i) => ids.indexOf(id) !== i));
+  const graph = getProjectDependencyGraph();
+  const assignments = new Map<string, string[]>();
+
+  for (const module of PROJECT_MODULES) {
+    for (const file of module.files) {
+      const key = pathKey(file);
+      assignments.set(key, [...(assignments.get(key) || []), module.id]);
+    }
+  }
+
+  const sharedFileAssignments = Array.from(assignments.entries())
+    .filter(([, modules]) => modules.length > 1)
+    .map(([filePath, moduleIds]) => ({ filePath, moduleIds }));
+
+  return {
+    status: duplicateModuleIds.length ? "needs_review" as const : "checked" as const,
+    totalModules: PROJECT_MODULES.length,
+    totalDeclaredFiles: getProjectFiles().length,
+    duplicateModuleIds,
+    sharedFileAssignments,
+    unresolvedDependencies: graph.nodes
+      .filter((node) => node.unresolvedDependencies.length > 0)
+      .map((node) => ({
+        moduleId: node.id,
+        dependsOn: node.unresolvedDependencies,
+      })),
+    truthPolicy: {
+      declarationCheckedOnly: true,
+      noFilesystemOrBuildVerification: true,
+    },
     timestamp: now(),
   };
 }

@@ -15,6 +15,7 @@ import {
 import {
   saveCodeMemory,
   setActiveCodeFile,
+  extractImports,
   createSmartCodeSummary,
   detectFilePurpose,
   extractExports,
@@ -30,6 +31,8 @@ import {
   completePendingAction,
   failPendingAction,
 } from "./pending-actions";
+
+import { createHash } from "node:crypto";
 
 export type CodeToolStatus =
   | "completed"
@@ -89,13 +92,11 @@ function normalizePath(filePath = "") {
 }
 
 function extractCodeBlock(text: string) {
-  const match = String(text || "").match(/```[\w-]*\n([\s\S]*?)```/);
+  const raw = String(text || "").replace(/\r\n/g, "\n");
+  const fenced = raw.match(/```[\w-]*\n([\s\S]*?)```/);
 
-  if (match?.[1]) {
-    return match[1].replace(/^\n/, "").replace(/\n$/, "");
-  }
-
-  return String(text || "").trim();
+  // Preserve first-line indentation. Trimming it could corrupt TypeScript code.
+  return (fenced?.[1] ?? raw).replace(/^\n/, "").replace(/\n$/, "");
 }
 
 function parsePathOnly(message: string, commands: string[]) {
@@ -116,15 +117,26 @@ function parsePathAndBody(message: string, commands: string[]) {
 }
 
 function parseSearchReplaceBlocks(text: string) {
-  const body = String(text || "");
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const searchIndex = lines.findIndex((line) => /^\s*SEARCH:[ \t]*/i.test(line));
+  const replaceIndex = lines.findIndex(
+    (line, index) => index > searchIndex && /^\s*REPLACE:[ \t]*/i.test(line)
+  );
 
-  const searchMatch = body.match(/SEARCH:\s*([\s\S]*?)\s*REPLACE:/i);
-  const replaceMatch = body.match(/REPLACE:\s*([\s\S]*)/i);
+  if (searchIndex < 0 || replaceIndex < 0) {
+    return { searchText: "", replacementText: "" };
+  }
 
-  return {
-    searchText: searchMatch?.[1]?.trim() || "",
-    replacementText: replaceMatch?.[1]?.trim() || "",
-  };
+  const searchFirst = lines[searchIndex].replace(/^\s*SEARCH:[ \t]*/i, "");
+  const replaceFirst = lines[replaceIndex].replace(/^\s*REPLACE:[ \t]*/i, "");
+  const searchLines = [...(searchFirst ? [searchFirst] : []), ...lines.slice(searchIndex + 1, replaceIndex)];
+  const replaceLines = [...(replaceFirst ? [replaceFirst] : []), ...lines.slice(replaceIndex + 1)];
+
+  // Remove one final transport newline; preserve indentation inside both blocks.
+  const searchText = searchLines.join("\n").replace(/\n$/, "");
+  const replacementText = replaceLines.join("\n").replace(/\n$/, "");
+
+  return { searchText, replacementText };
 }
 
 function parsePatch(message: string) {
@@ -160,7 +172,56 @@ function getActionType(action: PendingActionRecord) {
 }
 
 function getActionId(action: PendingActionRecord) {
-  return String(action?.id || "").trim();
+  return String(action?.id || action?.action?.id || "").trim();
+}
+
+function matchesCommand(message: string, command: string) {
+  const input = String(message || "").trim().toUpperCase();
+  const name = command.trim().toUpperCase();
+  return input === name || input.startsWith(`${name}:`) || input.startsWith(`${name} `);
+}
+
+function hashContent(content: string) {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function countOccurrences(content: string, text: string) {
+  if (!text) return 0;
+  return content.split(text).length - 1;
+}
+
+function checkPendingActionSaved(pendingAction: any) {
+  const actionId = getActionId(pendingAction);
+  const reportedFailure = pendingAction?.status === "failed" || pendingAction?.error;
+  return { saved: Boolean(actionId) && !reportedFailure, actionId };
+}
+
+async function checkFilePrecondition(action: PendingActionRecord, filePath: string) {
+  const metadata = action?.metadata || {};
+  const expectedHash = metadata.expectedFileHash;
+  const expectedExists = metadata.expectedFileExists;
+
+  // Legacy approved actions without a stored precondition keep the old behavior.
+  if (expectedHash === undefined && expectedExists === undefined) {
+    return { allowed: true, verified: false, reason: "Legacy pending action" };
+  }
+
+  const snapshot = await getProjectFileSnapshot(filePath);
+  if (typeof expectedExists === "boolean" && snapshot.exists !== expectedExists) {
+    return { allowed: false, verified: true, reason: "File existence changed after the pending action was created" };
+  }
+
+  if (typeof expectedHash === "string" && expectedHash) {
+    if (!snapshot.exists) {
+      return { allowed: false, verified: true, reason: "File no longer exists" };
+    }
+    const current = await readProjectFile(filePath);
+    if (hashContent(current) !== expectedHash) {
+      return { allowed: false, verified: true, reason: "File changed after approval request. Generate a new action." };
+    }
+  }
+
+  return { allowed: true, verified: true, reason: "File precondition verified" };
 }
 
 function buildApprovalOptions(
@@ -183,35 +244,58 @@ async function rememberCodeFile(
 ) {
   try {
     const normalizedPath = normalizePath(filePath);
+    setActiveCodeFile(normalizedPath, content);
 
-    await setActiveCodeFile(normalizedPath);
-
-    const summary = await (createSmartCodeSummary as any)(
-      normalizedPath,
-      content
-    );
-
-    const memoryPayload = {
+    const exports = extractExports(content);
+    const functions = extractFunctions(content);
+    const imports = extractImports(content);
+    const memoryResult = await saveCodeMemory({
       file_path: normalizedPath,
-      file_purpose: (detectFilePurpose as any)(normalizedPath, content),
-      code_summary: summary,
-      important_exports: (extractExports as any)(content),
-      important_functions: (extractFunctions as any)(content),
-      risk_level: (detectRiskLevel as any)(normalizedPath, content),
-      last_known_content: String(content || "").slice(0, 12000),
-      source,
-      updated_at: now(),
-    };
+      file_purpose: detectFilePurpose(normalizedPath, content),
+      code_summary: createSmartCodeSummary(normalizedPath, content),
+      important_exports: exports,
+      important_functions: functions,
+      imports,
+      exports,
+      risk_level: detectRiskLevel(normalizedPath, content),
+      last_known_content: content,
+      metadata: { source },
+    });
 
-    await (saveCodeMemory as any)(memoryPayload);
+    const persistentSaved = memoryResult?.supabase?.saved === true;
 
     return {
-      saved: true,
-      memoryPayload,
+      status: memoryResult?.status || "partial",
+      runtimeSaved: memoryResult?.runtimeSaved === true,
+      saved: persistentSaved,
+      supabase: memoryResult?.supabase
+        ? {
+          status: memoryResult.supabase.status,
+          saved: persistentSaved,
+          error: memoryResult.supabase.error,
+        }
+        : null,
+      embedding: memoryResult?.embedding
+        ? {
+          status: memoryResult.embedding.status,
+          error: memoryResult.embedding.error,
+        }
+        : null,
+      memoryPayload: {
+        file_path: normalizedPath,
+        file_purpose: detectFilePurpose(normalizedPath, content),
+        important_exports: exports,
+        important_functions: functions,
+        imports,
+        risk_level: detectRiskLevel(normalizedPath, content),
+        updated_at: now(),
+      },
     };
   } catch (error: any) {
     return {
+      status: "failed",
       saved: false,
+      runtimeSaved: false,
       error: error?.message || "Code memory save failed",
     };
   }
@@ -300,11 +384,9 @@ function getPatchBlocksFromPendingAction(action: PendingActionRecord) {
   const searchTextFromMetadata =
     typeof metadata.searchText === "string" ? metadata.searchText : "";
   const replacementTextFromMetadata =
-    typeof metadata.replacementText === "string"
-      ? metadata.replacementText
-      : "";
+    typeof metadata.replacementText === "string" ? metadata.replacementText : "";
 
-  if (searchTextFromMetadata && replacementTextFromMetadata) {
+  if (searchTextFromMetadata && replacementTextFromMetadata !== "") {
     return {
       searchText: searchTextFromMetadata,
       replacementText: replacementTextFromMetadata,
@@ -312,6 +394,21 @@ function getPatchBlocksFromPendingAction(action: PendingActionRecord) {
   }
 
   return parseSearchReplaceBlocks(action?.patch || "");
+}
+
+async function finishApprovedAction(action: PendingActionRecord) {
+  try {
+    const completedAction = await markPendingActionCompleted(action);
+    if (completedAction?.status === "failed" || completedAction?.error) {
+      return { completedAction, completionError: completedAction.error || "Action completion was not confirmed" };
+    }
+    return { completedAction, completionError: null };
+  } catch (error: any) {
+    return {
+      completedAction: null,
+      completionError: error?.message || "File changed, but pending action completion failed",
+    };
+  }
 }
 
 export async function handleListFiles(message = "LIST_FILES: app") {
@@ -357,6 +454,14 @@ export async function handleReadRealFile(message: string) {
     }
 
     const safety = await analyzeProjectFileSafety(filePath);
+    if (!safety.canRead || safety.blocked) {
+      return response("READ_REAL_FILE", "blocked", {
+        status: "blocked",
+        filePath,
+        reason: "File is not readable under project safety rules",
+        safety,
+      });
+    }
     const content = await readProjectFile(filePath);
     const memory = await rememberCodeFile(
       filePath,
@@ -411,6 +516,16 @@ export async function handleAnalyzeRealFile(message: string) {
       });
     }
 
+    const safety = await analyzeProjectFileSafety(filePath);
+    if (!safety.canRead || safety.blocked) {
+      return response("ANALYZE_REAL_FILE", "blocked", {
+        status: "blocked",
+        filePath,
+        reason: "File is not readable under project safety rules",
+        safety,
+      });
+    }
+
     const content = await readProjectFile(filePath);
 
     const analysis = {
@@ -420,7 +535,7 @@ export async function handleAnalyzeRealFile(message: string) {
       exports: (extractExports as any)(content),
       functions: (extractFunctions as any)(content),
       summary: await (createSmartCodeSummary as any)(filePath, content),
-      safety: await analyzeProjectFileSafety(filePath),
+      safety,
       snapshot,
     };
 
@@ -449,16 +564,17 @@ export async function handleAnalyzeRealFile(message: string) {
 
 export async function handleWriteFile(message: string) {
   try {
-    const { filePath, body } = parsePathAndBody(message, [
-      "WRITE_FILE",
-      "WRITE_REAL_FILE",
-    ]);
-
-    if (!filePath || !body) {
+    const { filePath, body } = parsePathAndBody(message, ["WRITE_FILE", "WRITE_REAL_FILE"]);
+    if (!filePath || !body.trim()) {
       return response("WRITE_FILE", "needs_attention", {
         status: "needs_attention",
         reason: "Missing file path or content",
       });
+    }
+
+    const validation = validateProjectFilePath(filePath, "write");
+    if (!validation.allowed) {
+      return response("WRITE_FILE", "blocked", { status: "blocked", filePath, validation });
     }
 
     const risk = analyzePendingActionRisk({
@@ -470,6 +586,17 @@ export async function handleWriteFile(message: string) {
       requires_approval: true,
     });
 
+    if (risk.blocked) {
+      return response("WRITE_FILE", "blocked", {
+        status: "blocked",
+        filePath,
+        risk,
+        message: "Risk analysis blocked this action. Nothing was queued or changed.",
+      });
+    }
+
+    const snapshot = await getProjectFileSnapshot(filePath);
+    const previousContent = snapshot.exists ? await readProjectFile(filePath) : null;
     const pendingAction = await savePendingAction({
       action_type: "WRITE_FILE",
       file_path: filePath,
@@ -480,25 +607,29 @@ export async function handleWriteFile(message: string) {
       metadata: {
         risk,
         createdByTool: "WRITE_FILE",
+        expectedFileExists: snapshot.exists,
+        expectedFileHash: previousContent !== null ? hashContent(previousContent) : null,
       },
     });
 
-    return response(
-      "WRITE_FILE",
-      risk.blocked ? "blocked" : "pending_approval",
-      {
-        status: risk.blocked ? "blocked" : "pending_approval",
-        message:
-          "Write action saved as pending. It must be approved before execution.",
+    const saved = checkPendingActionSaved(pendingAction);
+    if (!saved.saved) {
+      return response("WRITE_FILE", "failed", {
+        status: "failed",
         filePath,
-        risk,
-        pendingAction,
-        executeInstruction:
-          pendingAction?.id && !risk.blocked
-            ? `After Gabi approval, use EXECUTE_WRITE_FILE: ${pendingAction.id}`
-            : null,
-      }
-    );
+        error: pendingAction?.error || "Pending action was not persisted with an id",
+      });
+    }
+
+    return response("WRITE_FILE", "pending_approval", {
+      status: "pending_approval",
+      message: "Write action queued. Gabi approval is required before execution.",
+      filePath,
+      risk,
+      pendingAction,
+      noFileChanged: true,
+      executeInstruction: `After Gabi approval, use EXECUTE_WRITE_FILE: ${saved.actionId}`,
+    });
   } catch (error: any) {
     return response("WRITE_FILE", "failed", {
       status: "failed",
@@ -510,11 +641,19 @@ export async function handleWriteFile(message: string) {
 export async function handlePatchFile(message: string) {
   try {
     const parsed = parsePatch(message);
-
-    if (!parsed.filePath || !parsed.patch) {
+    if (!parsed.filePath || !parsed.searchText || !parsed.replacementText) {
       return response("PATCH_FILE", "needs_attention", {
         status: "needs_attention",
-        reason: "Missing file path or patch content",
+        reason: "Provide file path and valid SEARCH:/REPLACE: blocks; empty blocks are not accepted",
+      });
+    }
+
+    const validation = validateProjectFilePath(parsed.filePath, "patch");
+    if (!validation.allowed) {
+      return response("PATCH_FILE", "blocked", {
+        status: "blocked",
+        filePath: parsed.filePath,
+        validation,
       });
     }
 
@@ -526,6 +665,33 @@ export async function handlePatchFile(message: string) {
       source: "code-tools-handler",
       requires_approval: true,
     });
+
+    if (risk.blocked) {
+      return response("PATCH_FILE", "blocked", {
+        status: "blocked",
+        filePath: parsed.filePath,
+        risk,
+        message: "Risk analysis blocked this action. Nothing was queued or changed.",
+      });
+    }
+
+    if (parsed.searchText === parsed.replacementText) {
+      return response("PATCH_FILE", "needs_attention", {
+        status: "needs_attention",
+        reason: "The proposed patch makes no change",
+      });
+    }
+
+    const currentContent = await readProjectFile(parsed.filePath);
+    const matches = countOccurrences(currentContent, parsed.searchText);
+    if (matches !== 1) {
+      return response("PATCH_FILE", "needs_attention", {
+        status: "needs_attention",
+        filePath: parsed.filePath,
+        matchCount: matches,
+        reason: "SEARCH text must match exactly once. Nothing was queued or changed.",
+      });
+    }
 
     const pendingAction = await savePendingAction({
       action_type: "PATCH_FILE",
@@ -539,25 +705,30 @@ export async function handlePatchFile(message: string) {
         searchText: parsed.searchText,
         replacementText: parsed.replacementText,
         createdByTool: "PATCH_FILE",
+        expectedFileExists: true,
+        expectedFileHash: hashContent(currentContent),
       },
     });
 
-    return response(
-      "PATCH_FILE",
-      risk.blocked ? "blocked" : "pending_approval",
-      {
-        status: risk.blocked ? "blocked" : "pending_approval",
-        message:
-          "Patch action saved as pending. It must be approved before execution.",
+    const saved = checkPendingActionSaved(pendingAction);
+    if (!saved.saved) {
+      return response("PATCH_FILE", "failed", {
+        status: "failed",
         filePath: parsed.filePath,
-        risk,
-        pendingAction,
-        executeInstruction:
-          pendingAction?.id && !risk.blocked
-            ? `After Gabi approval, use EXECUTE_PATCH_FILE: ${pendingAction.id}`
-            : null,
-      }
-    );
+        error: pendingAction?.error || "Pending action was not persisted with an id",
+      });
+    }
+
+    return response("PATCH_FILE", "pending_approval", {
+      status: "pending_approval",
+      message: "Patch queued. Gabi approval is required before execution.",
+      filePath: parsed.filePath,
+      risk,
+      matchCount: matches,
+      pendingAction,
+      noFileChanged: true,
+      executeInstruction: `After Gabi approval, use EXECUTE_PATCH_FILE: ${saved.actionId}`,
+    });
   } catch (error: any) {
     return response("PATCH_FILE", "failed", {
       status: "failed",
@@ -613,6 +784,16 @@ export async function handleExecuteWriteFile(message: string) {
       });
     }
 
+    const precondition = await checkFilePrecondition(action, filePath);
+    if (!precondition.allowed) {
+      return response("EXECUTE_WRITE_FILE", "blocked", {
+        status: "blocked",
+        filePath,
+        precondition,
+        reason: "File state differs from the approved action; create a new pending action.",
+      });
+    }
+
     const result = await writeProjectFile(
       filePath,
       content,
@@ -622,19 +803,17 @@ export async function handleExecuteWriteFile(message: string) {
       )
     );
 
-    const memory = await rememberCodeFile(
-      filePath,
-      content,
-      "EXECUTE_WRITE_FILE"
-    );
+    const completion = await finishApprovedAction(action);
+    const memory = await rememberCodeFile(filePath, content, "EXECUTE_WRITE_FILE");
+    const finalStatus: CodeToolStatus = completion.completionError ? "needs_attention" : "completed";
 
-    const completedAction = await markPendingActionCompleted(action);
-
-    return response("EXECUTE_WRITE_FILE", "completed", {
-      status: "completed",
+    return response("EXECUTE_WRITE_FILE", finalStatus, {
+      status: finalStatus,
+      fileChanged: true,
       result,
       memory,
-      completedAction,
+      completedAction: completion.completedAction,
+      completionError: completion.completionError,
       truthPolicy: {
         executedOnlyAfterPendingApproval: true,
         fileWrittenByDevAgent: true,
@@ -705,6 +884,27 @@ export async function handleExecutePatchFile(message: string) {
       });
     }
 
+    const precondition = await checkFilePrecondition(action, filePath);
+    if (!precondition.allowed) {
+      return response("EXECUTE_PATCH_FILE", "blocked", {
+        status: "blocked",
+        filePath,
+        precondition,
+        reason: "File changed after patch request; create a new pending action.",
+      });
+    }
+
+    const currentContent = await readProjectFile(filePath);
+    const matchCount = countOccurrences(currentContent, blocks.searchText);
+    if (matchCount !== 1 || blocks.searchText === blocks.replacementText) {
+      return response("EXECUTE_PATCH_FILE", "blocked", {
+        status: "blocked",
+        filePath,
+        matchCount,
+        reason: "Approved SEARCH text is no longer a single unambiguous change.",
+      });
+    }
+
     const result = await patchProjectFile(
       filePath,
       blocks.searchText,
@@ -715,21 +915,18 @@ export async function handleExecutePatchFile(message: string) {
       )
     );
 
+    const completion = await finishApprovedAction(action);
     const content = await readProjectFile(filePath);
+    const memory = await rememberCodeFile(filePath, content, "EXECUTE_PATCH_FILE");
+    const finalStatus: CodeToolStatus = completion.completionError ? "needs_attention" : "completed";
 
-    const memory = await rememberCodeFile(
-      filePath,
-      content,
-      "EXECUTE_PATCH_FILE"
-    );
-
-    const completedAction = await markPendingActionCompleted(action);
-
-    return response("EXECUTE_PATCH_FILE", "completed", {
-      status: "completed",
+    return response("EXECUTE_PATCH_FILE", finalStatus, {
+      status: finalStatus,
+      fileChanged: true,
       result,
       memory,
-      completedAction,
+      completedAction: completion.completedAction,
+      completionError: completion.completionError,
       truthPolicy: {
         executedOnlyAfterPendingApproval: true,
         filePatchedByDevAgent: true,
@@ -754,16 +951,17 @@ export async function handleExecutePatchFile(message: string) {
 
 export async function handleRollbackFile(message: string) {
   try {
-    const filePath = parsePathOnly(message, [
-      "ROLLBACK_FILE",
-      "ROLLBACK_REAL_FILE",
-    ]);
-
+    const filePath = parsePathOnly(message, ["ROLLBACK_FILE", "ROLLBACK_REAL_FILE"]);
     if (!filePath) {
       return response("ROLLBACK_FILE", "needs_attention", {
         status: "needs_attention",
         reason: "Missing file path",
       });
+    }
+
+    const validation = validateProjectFilePath(filePath, "rollback");
+    if (!validation.allowed) {
+      return response("ROLLBACK_FILE", "blocked", { status: "blocked", filePath, validation });
     }
 
     const risk = analyzePendingActionRisk({
@@ -773,7 +971,21 @@ export async function handleRollbackFile(message: string) {
       source: "code-tools-handler",
       requires_approval: true,
     });
+    if (risk.blocked) {
+      return response("ROLLBACK_FILE", "blocked", {
+        status: "blocked", filePath, risk,
+        message: "Rollback blocked by risk analysis; nothing queued or changed.",
+      });
+    }
 
+    const snapshot = await getProjectFileSnapshot(filePath);
+    if (!snapshot.exists) {
+      return response("ROLLBACK_FILE", "needs_attention", {
+        status: "needs_attention", filePath, reason: "Target file does not exist",
+      });
+    }
+
+    const currentContent = await readProjectFile(filePath);
     const pendingAction = await savePendingAction({
       action_type: "ROLLBACK_FILE",
       file_path: filePath,
@@ -783,29 +995,28 @@ export async function handleRollbackFile(message: string) {
       metadata: {
         risk,
         createdByTool: "ROLLBACK_FILE",
+        expectedFileExists: true,
+        expectedFileHash: hashContent(currentContent),
       },
     });
 
-    return response(
-      "ROLLBACK_FILE",
-      risk.blocked ? "blocked" : "pending_approval",
-      {
-        status: risk.blocked ? "blocked" : "pending_approval",
-        message:
-          "Rollback action saved as pending. It must be approved before execution.",
-        filePath,
-        risk,
-        pendingAction,
-        executeInstruction:
-          pendingAction?.id && !risk.blocked
-            ? `After Gabi approval, use EXECUTE_ROLLBACK_FILE: ${pendingAction.id}`
-            : null,
-      }
-    );
+    const saved = checkPendingActionSaved(pendingAction);
+    if (!saved.saved) {
+      return response("ROLLBACK_FILE", "failed", {
+        status: "failed", filePath,
+        error: pendingAction?.error || "Pending action was not persisted with an id",
+      });
+    }
+
+    return response("ROLLBACK_FILE", "pending_approval", {
+      status: "pending_approval",
+      message: "Rollback queued. Gabi approval is required before execution.",
+      filePath, risk, pendingAction, noFileChanged: true,
+      executeInstruction: `After Gabi approval, use EXECUTE_ROLLBACK_FILE: ${saved.actionId}`,
+    });
   } catch (error: any) {
     return response("ROLLBACK_FILE", "failed", {
-      status: "failed",
-      error: error?.message || "Unknown ROLLBACK_FILE error",
+      status: "failed", error: error?.message || "Unknown ROLLBACK_FILE error",
     });
   }
 }
@@ -856,6 +1067,14 @@ export async function handleExecuteRollbackFile(message: string) {
       });
     }
 
+    const precondition = await checkFilePrecondition(action, filePath);
+    if (!precondition.allowed) {
+      return response("EXECUTE_ROLLBACK_FILE", "blocked", {
+        status: "blocked", filePath, precondition,
+        reason: "File changed after rollback request. Create a new pending action.",
+      });
+    }
+
     const result = await rollbackProjectFile(
       filePath,
       buildApprovalOptions(
@@ -864,21 +1083,18 @@ export async function handleExecuteRollbackFile(message: string) {
       )
     );
 
+    const completion = await finishApprovedAction(action);
     const content = await readProjectFile(filePath);
+    const memory = await rememberCodeFile(filePath, content, "EXECUTE_ROLLBACK_FILE");
+    const finalStatus: CodeToolStatus = completion.completionError ? "needs_attention" : "completed";
 
-    const memory = await rememberCodeFile(
-      filePath,
-      content,
-      "EXECUTE_ROLLBACK_FILE"
-    );
-
-    const completedAction = await markPendingActionCompleted(action);
-
-    return response("EXECUTE_ROLLBACK_FILE", "completed", {
-      status: "completed",
+    return response("EXECUTE_ROLLBACK_FILE", finalStatus, {
+      status: finalStatus,
+      fileChanged: true,
       result,
       memory,
-      completedAction,
+      completedAction: completion.completedAction,
+      completionError: completion.completionError,
       truthPolicy: {
         executedOnlyAfterPendingApproval: true,
         rollbackByDevAgent: true,
@@ -903,12 +1119,8 @@ export async function handleExecuteRollbackFile(message: string) {
 
 export async function handleGeneratePatch(message: string) {
   try {
-    const { filePath, body } = parsePathAndBody(message, [
-      "GENERATE_PATCH",
-      "CREATE_PATCH",
-    ]);
-
-    if (!filePath || !body) {
+    const { filePath, body } = parsePathAndBody(message, ["GENERATE_PATCH", "CREATE_PATCH"]);
+    if (!filePath || !body.trim()) {
       return response("GENERATE_PATCH", "needs_attention", {
         status: "needs_attention",
         reason: "Missing file path or patch request",
@@ -917,38 +1129,40 @@ export async function handleGeneratePatch(message: string) {
 
     const currentContent = await readProjectFile(filePath);
     const safety = await analyzeProjectFileSafety(filePath);
+    if (!safety.canRead || safety.blocked) {
+      return response("GENERATE_PATCH", "blocked", {
+        status: "blocked", filePath, safety,
+      });
+    }
+
+    const blocks = parseSearchReplaceBlocks(body);
+    const matchCount = blocks.searchText
+      ? countOccurrences(currentContent, blocks.searchText)
+      : null;
+    const noChange = Boolean(blocks.searchText && blocks.searchText === blocks.replacementText);
 
     const patchPlan = {
       filePath,
       request: body,
       safety,
       currentPreview: currentContent.slice(0, 3000),
-      instruction:
-        "Generate a SEARCH/REPLACE patch using the currentPreview as verified file context.",
-      format: {
-        search: "SEARCH:",
-        replace: "REPLACE:",
-      },
-      truthPolicy: {
-        noFileChanged: true,
-        verifiedFromFilesystem: true,
-      },
+      matchCount,
+      patchApplicableOnce: matchCount === 1 && !noChange && Boolean(blocks.replacementText),
+      noChange,
+      instruction: "Review the SEARCH/REPLACE blocks against verified content before queuing with PATCH_FILE.",
+      format: { search: "SEARCH:", replace: "REPLACE:" },
+      truthPolicy: { noFileChanged: true, verifiedFromFilesystem: true },
     };
 
-    await rememberCodeFile(
-      filePath,
-      currentContent,
-      "GENERATE_PATCH"
-    );
-
+    const memory = await rememberCodeFile(filePath, currentContent, "GENERATE_PATCH");
     return response("GENERATE_PATCH", "completed", {
       status: "completed",
       patchPlan,
+      memory,
     });
   } catch (error: any) {
     return response("GENERATE_PATCH", "failed", {
-      status: "failed",
-      error: error?.message || "Unknown GENERATE_PATCH error",
+      status: "failed", error: error?.message || "Unknown GENERATE_PATCH error",
     });
   }
 }
@@ -1002,98 +1216,30 @@ export async function handleSearchInsideFiles(message: string) {
 }
 
 export async function handleCodeToolCommand(message: string) {
-  const upper = String(message || "").trim().toUpperCase();
+  const commandRoutes: Array<{ names: string[]; handler: (message: string) => Promise<Response> }> = [
+    { names: ["LIST_FILES", "LIST_PROJECT_FILES"], handler: handleListFiles },
+    { names: ["READ_REAL_FILE", "READ_FILE"], handler: handleReadRealFile },
+    { names: ["ANALYZE_REAL_FILE", "ANALYZE_FILE"], handler: handleAnalyzeRealFile },
+    { names: ["WRITE_REAL_FILE", "WRITE_FILE"], handler: handleWriteFile },
+    { names: ["PATCH_REAL_FILE", "PATCH_FILE"], handler: handlePatchFile },
+    { names: ["EXECUTE_WRITE_FILE", "EXECUTE_WRITE"], handler: handleExecuteWriteFile },
+    { names: ["EXECUTE_PATCH_FILE", "EXECUTE_PATCH"], handler: handleExecutePatchFile },
+    { names: ["ROLLBACK_REAL_FILE", "ROLLBACK_FILE"], handler: handleRollbackFile },
+    { names: ["EXECUTE_ROLLBACK_FILE", "EXECUTE_ROLLBACK"], handler: handleExecuteRollbackFile },
+    { names: ["GENERATE_PATCH", "CREATE_PATCH"], handler: handleGeneratePatch },
+    { names: ["SEARCH_FILES", "FIND_FILES"], handler: handleSearchFiles },
+    { names: ["SEARCH_INSIDE_FILES", "SEARCH_INSIDE_FILE", "SEARCH_INSIDE", "SEARCH_CODE"], handler: handleSearchInsideFiles },
+  ];
 
-  if (
-    upper.startsWith("LIST_FILES") ||
-    upper.startsWith("LIST_PROJECT_FILES")
-  ) {
-    return handleListFiles(message);
-  }
-
-  if (
-    upper.startsWith("READ_REAL_FILE") ||
-    upper.startsWith("READ_FILE")
-  ) {
-    return handleReadRealFile(message);
-  }
-
-  if (
-    upper.startsWith("ANALYZE_REAL_FILE") ||
-    upper.startsWith("ANALYZE_FILE")
-  ) {
-    return handleAnalyzeRealFile(message);
-  }
-
-  if (
-    upper.startsWith("WRITE_FILE") ||
-    upper.startsWith("WRITE_REAL_FILE")
-  ) {
-    return handleWriteFile(message);
-  }
-
-  if (
-    upper.startsWith("PATCH_FILE") ||
-    upper.startsWith("PATCH_REAL_FILE")
-  ) {
-    return handlePatchFile(message);
-  }
-
-  if (
-    upper.startsWith("EXECUTE_WRITE") ||
-    upper.startsWith("EXECUTE_WRITE_FILE")
-  ) {
-    return handleExecuteWriteFile(message);
-  }
-
-  if (
-    upper.startsWith("EXECUTE_PATCH") ||
-    upper.startsWith("EXECUTE_PATCH_FILE")
-  ) {
-    return handleExecutePatchFile(message);
-  }
-
-  if (
-    upper.startsWith("ROLLBACK_FILE") ||
-    upper.startsWith("ROLLBACK_REAL_FILE")
-  ) {
-    return handleRollbackFile(message);
-  }
-
-  if (
-    upper.startsWith("EXECUTE_ROLLBACK") ||
-    upper.startsWith("EXECUTE_ROLLBACK_FILE")
-  ) {
-    return handleExecuteRollbackFile(message);
-  }
-
-  if (
-    upper.startsWith("GENERATE_PATCH") ||
-    upper.startsWith("CREATE_PATCH")
-  ) {
-    return handleGeneratePatch(message);
-  }
-
-  if (
-    upper.startsWith("SEARCH_FILES") ||
-    upper.startsWith("FIND_FILES")
-  ) {
-    return handleSearchFiles(message);
-  }
-
-  if (
-    upper.startsWith("SEARCH_INSIDE_FILES") ||
-    upper.startsWith("SEARCH_INSIDE_FILE") ||
-    upper.startsWith("SEARCH_INSIDE") ||
-    upper.startsWith("SEARCH_CODE")
-  ) {
-    return handleSearchInsideFiles(message);
+  for (const route of commandRoutes) {
+    if (route.names.some((name) => matchesCommand(message, name))) {
+      return route.handler(message);
+    }
   }
 
   return response("CODE_TOOL", "needs_attention", {
     status: "needs_attention",
     reason: "Unknown code tool command",
-    message,
     supportedCommands: [
       "LIST_FILES: app",
       "READ_REAL_FILE: app/file.ts",
