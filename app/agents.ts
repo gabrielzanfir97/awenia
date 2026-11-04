@@ -2,6 +2,7 @@ export type AgentStatus =
   | "idle"
   | "active"
   | "completed"
+  | "ready_for_review"
   | "failed"
   | "cooldown";
 
@@ -12,6 +13,10 @@ export type AgentExecutionResult = {
   result: string;
   confidence: number;
   timestamp: string;
+  proposal?: import("./self-coding-v6").CodingProposal;
+  debugAnalysis?: import("./self-debug").DebugAnalysis;
+  fileChanged?: false;
+  requiresApproval?: boolean;
 };
 
 export type AgentMemory = {
@@ -117,6 +122,61 @@ function createAgent(
       this.memory.runs += 1;
 
       try {
+        // Explicit commands only: regular autonomy workflow text is never code execution.
+        if (this.id === "coder" && task.startsWith("CODER_PROPOSAL_JSON:")) {
+          const raw = task.slice("CODER_PROPOSAL_JSON:".length);
+          const request: unknown = JSON.parse(raw);
+          if (!request || typeof request !== "object" || Array.isArray(request)) {
+            throw new Error("Invalid coder proposal request.");
+          }
+          const fields = request as Record<string, unknown>;
+          if (typeof fields.filePath !== "string" ||
+              typeof fields.task !== "string" ||
+              !fields.filePath.trim() || !fields.task.trim()) {
+            throw new Error("Coder requires an explicit file path and task.");
+          }
+          const { createCodingProposal } = await import("./self-coding-v6");
+          const proposal = await createCodingProposal(fields.filePath, fields.task);
+          if (proposal.status !== "ready_for_review" ||
+              proposal.requiresApproval !== true || proposal.fileChanged !== false) {
+            throw new Error("Unverified coding proposal result.");
+          }
+          const result = `Coding proposal ready for review: ${proposal.filePath}. No file changed.`;
+          this.status = "ready_for_review";
+          this.memory.successes += 1; // Proposal generation only, NOT patch application.
+          this.memory.lastResult = result;
+          this.memory.lastError = undefined;
+          this.confidence = calculateConfidence(this.memory);
+          return {
+            agentId: this.id, status: this.status, task: fields.task,
+            result, confidence: this.confidence, proposal,
+            fileChanged: false, requiresApproval: true,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (this.id === "debugger" && task.startsWith("DEBUG_ANALYSIS_TEXT:")) {
+          const errorText = task.slice("DEBUG_ANALYSIS_TEXT:".length).trim();
+          if (!errorText) throw new Error("Debugger requires real error text.");
+          const { analyzeError } = await import("./self-debug");
+          const debugAnalysis = analyzeError(errorText);
+          if (debugAnalysis.status !== "analyzed") {
+            throw new Error("Debugger could not analyze the supplied error.");
+          }
+          const result = `Debugger analyzed supplied error: ${debugAnalysis.errorType}. No fix applied.`;
+          this.status = "completed"; // Error-text analysis was performed; not a code fix.
+          this.memory.successes += 1;
+          this.memory.lastResult = result;
+          this.memory.lastError = undefined;
+          this.confidence = calculateConfidence(this.memory);
+          return {
+            agentId: this.id, status: this.status, task: errorText,
+            result, confidence: this.confidence, debugAnalysis,
+            fileChanged: false,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
         const matchedCapabilities = this.capabilities.filter((capability) =>
           normalize(task).includes(normalize(capability).replace("_", " "))
         );
@@ -126,10 +186,13 @@ function createAgent(
             ? matchedCapabilities.join(", ")
             : "general reasoning";
 
-        const result = `${this.id} executed task using ${capabilityText}: ${task}`;
+        const result =
+          `Agent ${this.id} has no real task executor connected. ` +
+          `Matched capabilities: ${capabilityText}. Task not executed: ${task}`;
 
-        this.status = "completed";
-        this.memory.successes += 1;
+        this.status = "failed";
+        this.memory.failures += 1;
+        this.memory.lastError = result;
         this.memory.lastResult = result;
         this.confidence = calculateConfidence(this.memory);
 

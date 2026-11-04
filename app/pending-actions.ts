@@ -1,4 +1,6 @@
-import { supabase } from "./supabase";
+import { getSupabaseServer } from "./supabase-server";
+
+const supabase = getSupabaseServer();
 
 export type PendingActionStatus =
   | "pending"

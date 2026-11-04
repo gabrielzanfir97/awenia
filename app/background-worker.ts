@@ -46,11 +46,14 @@ async function safeRead<T>(
   fallback: T
 ) {
   try {
+    const data = await reader();
+    const nestedStatus = (data as { status?: unknown } | null)?.status;
+    const failed = nestedStatus === "failed" || nestedStatus === "blocked";
     return {
       name,
-      data: await reader(),
-      status: "connected",
-      error: null,
+      data: failed ? fallback : data,
+      status: failed ? "failed" : "connected",
+      error: failed ? `${name} returned status ${nestedStatus}` : null,
     };
   } catch (error: any) {
     return {
@@ -483,7 +486,9 @@ export async function runBackgroundWorker(
     const status =
       workflowResult?.success === true
         ? "executed"
-        : calculateWorkerStatus(primaryTask);
+        : workflowResult !== null
+          ? "needs_attention"
+          : calculateWorkerStatus(primaryTask);
 
     return {
       status,

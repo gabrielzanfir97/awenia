@@ -39,10 +39,16 @@ function calculateEvolutionStatus(input: {
 }) {
   if (
     input.runtimeStatus === "failed" ||
-    input.selfImprovementStatus === "failed" ||
-    input.workflowSuccess === false
+    input.selfImprovementStatus === "failed"
   ) {
     return "failed";
+  }
+
+  // Planning is not execution or evidence of evolution.
+  if (input.workflowSuccess !== true) {
+    return input.decision === "monitor" && input.selfImprovementStatus !== "planned"
+      ? "stable"
+      : "planned";
   }
 
   if (input.awarenessScore >= 70 && input.decision !== "monitor") {

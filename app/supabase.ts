@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { getSupabaseServer } from "./supabase-server";
 
 export type SupabaseConnectionStatus =
   | "configured"
@@ -54,21 +54,7 @@ export function getSupabaseConfig() {
   };
 }
 
-export const supabase = createClient(
-  SUPABASE_URL || FALLBACK_SUPABASE_URL,
-  SUPABASE_KEY || FALLBACK_SUPABASE_KEY,
-  {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-    global: {
-      headers: {
-        "x-awenia-client": "local-awenia",
-      },
-    },
-  }
-);
+export const supabase = getSupabaseServer();
 
 export async function checkSupabaseHealth(
   tableName = "memories"

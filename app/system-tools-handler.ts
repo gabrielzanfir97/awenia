@@ -1,5 +1,5 @@
 import { runBackgroundWorker } from "./background-worker";
-import { analyzeError } from "./self-debug";
+import { prepareDebuggerAnalysis } from "./agent-orchestrator";
 import { createTaskPlan } from "./task-planner";
 import { runOmniscientCognition } from "./omniscient-cognition";
 import { runAutonomousTests } from "./autonomous-testing";
@@ -139,11 +139,14 @@ export async function handleDebugError(message: string) {
   try {
     const errorText = extractAfterPrefix(message, "DEBUG_ERROR:");
 
-    const result = analyzeError(errorText);
+    const agentResult = await prepareDebuggerAnalysis(errorText);
+    if (agentResult.status !== "analyzed" || !agentResult.analysis) {
+      return jsonResponse(createErrorResult(
+        "DEBUG_ERROR", new Error(agentResult.error || "Debugger analysis failed.")
+      ));
+    }
 
-    return jsonResponse(
-      createResult("DEBUG_ERROR", result)
-    );
+    return jsonResponse(createResult("DEBUG_ERROR", agentResult.analysis));
   } catch (error: any) {
     return jsonResponse(
       createErrorResult("DEBUG_ERROR", error)

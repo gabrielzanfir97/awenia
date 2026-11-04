@@ -106,6 +106,22 @@ type ToolCommandMatch = ToolCommandDefinition & {
 
 const TOOL_COMMANDS: ToolCommandDefinition[] = [
   {
+    prefix: "PATCH_BATCH:",
+    kind: "patch",
+    risk: "medium",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Prepare multiple file patches for individual approval",
+  },
+  {
+    prefix: "EXECUTE_PATCH_BATCH:",
+    kind: "patch",
+    risk: "high",
+    requiresApproval: true,
+    securityAction: "patch",
+    description: "Execute an approved batch of file patches",
+  },
+  {
     prefix: "LIST_FILES",
     kind: "read",
     risk: "low",

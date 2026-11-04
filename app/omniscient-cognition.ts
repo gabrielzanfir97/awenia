@@ -41,10 +41,20 @@ async function safeRead<T>(
   error: string | null;
 }> {
   try {
+    const data = await reader();
+    const nestedStatus = (data as { status?: unknown } | null)?.status;
+    if (nestedStatus === "failed" || nestedStatus === "blocked") {
+      return {
+        name,
+        data,
+        status: "failed" as const,
+        error: `${name} returned status ${nestedStatus}`,
+      };
+    }
     return {
       name,
-      data: await reader(),
-      status: "connected",
+      data,
+      status: "connected" as const,
       error: null,
     };
   } catch (error: any) {
@@ -238,7 +248,8 @@ async function shouldSaveOmniscientSuggestion(target: OmniscientTarget) {
 }
 
 export async function runOmniscientCognition(
-  task = "Analyze verified whole-system cognition for Awenia"
+  task = "Analyze verified whole-system cognition for Awenia",
+  precomputedGlobal?: Awaited<ReturnType<typeof runGlobalCognition>>
 ) {
   const startedAt = new Date().toISOString();
 
@@ -267,7 +278,9 @@ export async function runOmniscientCognition(
 
     const globalResult = await safeRead(
       "globalCognition",
-      () => runGlobalCognition(task),
+      () => precomputedGlobal
+        ? Promise.resolve(precomputedGlobal)
+        : runGlobalCognition(task),
       {
         status: "failed",
         globalCognition: {

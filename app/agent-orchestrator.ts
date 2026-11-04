@@ -90,15 +90,11 @@ function ensureOrchestratorLast(agents: AgentDefinition[]) {
     (agent, index, all) => all.findIndex((item) => item.id === agent.id) === index
   );
 
-  const hasOrchestrator = withoutDuplicates.some(
-    (agent) => agent.id === "orchestrator"
-  );
-
-  if (!hasOrchestrator) {
-    withoutDuplicates.push(Agents.orchestrator);
-  }
-
-  return withoutDuplicates;
+  // The orchestration step belongs at the end of every workflow.
+  return [
+    ...withoutDuplicates.filter((agent) => agent.id !== "orchestrator"),
+    Agents.orchestrator,
+  ];
 }
 
 function buildAgentTask(
@@ -170,6 +166,81 @@ export function coordinateAgents(
   };
 }
 
+export async function prepareCoderProposal(
+  filePath: string,
+  task: string
+): Promise<{
+  agentId: "coder";
+  status: "ready_for_review" | "failed";
+  proposal?: import("./self-coding-v6").CodingProposal;
+  error?: string;
+  fileChanged: false;
+  requiresApproval: true;
+}> {
+  try {
+    if (!filePath.trim() || !task.trim()) {
+      throw new Error("File path and coding task are required.");
+    }
+
+    const executed = await Agents.coder.execute(
+      `CODER_PROPOSAL_JSON:${JSON.stringify({ filePath, task })}`
+    );
+    if (executed.status !== "ready_for_review" || !executed.proposal) {
+      throw new Error(executed.result || "Coder proposal generation failed.");
+    }
+    const proposal = executed.proposal;
+
+    if (
+      proposal.status !== "ready_for_review" ||
+      proposal.fileChanged !== false ||
+      proposal.requiresApproval !== true
+    ) {
+      throw new Error("Coding proposal failed safety validation.");
+    }
+
+    return {
+      agentId: "coder",
+      status: "ready_for_review",
+      proposal,
+      fileChanged: false,
+      requiresApproval: true,
+    };
+  } catch (error: unknown) {
+    return {
+      agentId: "coder",
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      fileChanged: false,
+      requiresApproval: true,
+    };
+  }
+}
+
+export async function prepareDebuggerAnalysis(errorText: string): Promise<{
+  agentId: "debugger";
+  status: "analyzed" | "failed";
+  analysis?: import("./self-debug").DebugAnalysis;
+  error?: string;
+  fileChanged: false;
+}> {
+  try {
+    const executed = await Agents.debugger.execute(`DEBUG_ANALYSIS_TEXT:${errorText}`);
+    if (executed.status !== "completed" || !executed.debugAnalysis) {
+      throw new Error(executed.result || "Debugger analysis failed.");
+    }
+    return {
+      agentId: "debugger", status: "analyzed",
+      analysis: executed.debugAnalysis, fileChanged: false,
+    };
+  } catch (error: unknown) {
+    return {
+      agentId: "debugger", status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      fileChanged: false,
+    };
+  }
+}
+
 export async function executeAgentWorkflow(
   taskType: string,
   taskDetail = ""
@@ -178,7 +249,7 @@ export async function executeAgentWorkflow(
 
   workflow.status = "active";
 
-  broadcastAgentMessage(
+  const startBroadcast = await broadcastAgentMessage(
     "orchestrator",
     workflow.activeAgents.map((agent) => agent.id),
     `Starting workflow ${workflow.workflowId} for task type: ${taskType}`,
@@ -188,6 +259,12 @@ export async function executeAgentWorkflow(
       taskGoal: workflow.taskGoal,
     }
   );
+  if (
+    startBroadcast.status !== "sent" ||
+    startBroadcast.results.some((item) => item.status !== "sent")
+  ) {
+    throw new Error("Workflow broadcast failed or was blocked");
+  }
 
   for (const step of workflow.steps) {
     const agent = Agents[step.agentId];
@@ -213,7 +290,7 @@ export async function executeAgentWorkflow(
     Agents.orchestrator.sendMessage();
     agent.receiveMessage();
 
-    communicateBetweenAgents(
+    await communicateBetweenAgents(
       "orchestrator",
       step.agentId,
       `Execute workflow step ${step.step}: ${step.task}`,
@@ -236,7 +313,7 @@ export async function executeAgentWorkflow(
     agent.sendMessage();
     Agents.orchestrator.receiveMessage();
 
-    communicateBetweenAgents(
+    await communicateBetweenAgents(
       step.agentId,
       "orchestrator",
       result.result,
@@ -257,8 +334,8 @@ export async function executeAgentWorkflow(
 
     workflow.messages.push(`${result.agentId}: ${result.result}`);
 
-    if (result.status === "failed") {
-      workflow.status = "failed";
+    if (result.status !== "completed") {
+      workflow.status = result.status;
       workflow.success = false;
       workflow.confidence = calculateWorkflowConfidence(workflow.steps);
       workflow.completedAt = new Date().toISOString();
@@ -276,7 +353,7 @@ export async function executeAgentWorkflow(
   workflow.agentState = getAgentState();
   workflow.communicationStats = getAgentCommunicationStats();
 
-  createAgentBroadcast(
+  await createAgentBroadcast(
     "orchestrator",
     `Workflow ${workflow.workflowId} completed with confidence ${workflow.confidence}`,
     7,
@@ -292,7 +369,7 @@ export async function executeAgentWorkflow(
   return workflow;
 }
 
-function communicateBetweenAgents(
+async function communicateBetweenAgents(
   from: string,
   to: string | string[],
   message: string,
@@ -300,56 +377,37 @@ function communicateBetweenAgents(
   type: string,
   meta: Record<string, any>
 ) {
-  try {
-    // If recipient is an array or a special broadcast keyword, use broadcast
-    if (Array.isArray(to) || (typeof to === "string" && to === "all")) {
-      const recipients = Array.isArray(to) ? to : Object.keys(Agents) as string[];
-      broadcastAgentMessage(from, recipients, message, {
-        priority,
-        type,
-        meta,
-      });
-      return;
-    }
-
-    // Default: single recipient
-    sendAgentMessage(from, to, message, {
-      priority,
-      type,
-      meta,
+  if (Array.isArray(to) || to === "all") {
+    const recipients = Array.isArray(to) ? to : Object.keys(Agents);
+    const result = await broadcastAgentMessage(from, recipients, message, {
+      priority, type, meta,
     });
-  } catch (err) {
-    // swallow communication errors but update communication state if available
-    try {
-      const state = getAgentCommunicationState();
-      // no-op: referencing to keep state updated in systems that track access
-      void state;
-    } catch (_) {
-      // ignore
+    if (result.status !== "sent" || result.results.some((entry) => entry.status !== "sent")) {
+      throw new Error("Agent broadcast failed or was blocked");
     }
+    return;
+  }
+
+  const result = await sendAgentMessage(from, to, message, {
+    priority, type, meta,
+  });
+  if (result.status !== "sent" || result.savedRuntime !== true) {
+    throw new Error(`Agent message was not delivered to ${to}`);
   }
 }
-function createAgentBroadcast(
+
+async function createAgentBroadcast(
   from: string,
   message: string,
   priority: number,
   type: string,
   meta: { workflowId: string; taskType: string; confidence: number; success: boolean }
 ) {
-  try {
-    const recipients = Object.keys(Agents) as string[];
-    broadcastAgentMessage(from, recipients, message, {
-      priority,
-      type,
-      meta,
-    });
-  } catch (err) {
-    try {
-      // touch communication state to keep telemetry consistent
-      void getAgentCommunicationState();
-    } catch (_e) {
-      // ignore
-    }
+  const recipients = Object.keys(Agents);
+  const result = await broadcastAgentMessage(from, recipients, message, {
+    priority, type, meta,
+  });
+  if (result.status !== "sent" || result.results.some((entry) => entry.status !== "sent")) {
+    throw new Error("Final agent broadcast failed or was blocked");
   }
 }
-

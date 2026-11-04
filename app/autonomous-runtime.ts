@@ -1,6 +1,6 @@
 import { buildAwarenessState } from "./awareness";
 import { makeAutonomousDecision } from "./decision-engine";
-import { executeAgentWorkflow } from "./agent-orchestrator";
+import { coordinateAgents } from "./agent-orchestrator";
 
 import {
   createAutonomousReflection,
@@ -47,7 +47,7 @@ export async function runAutonomousRuntime() {
       activeGoals,
     });
 
-    const workflow = await executeAgentWorkflow(
+    const workflow = coordinateAgents(
       decision.priority,
       `${decision.action}. Reason: ${decision.reason}`
     );
@@ -79,12 +79,9 @@ export async function runAutonomousRuntime() {
       suggestionCreated = true;
     }
 
-    const runtimeStatus =
-      workflow.status === "failed"
-        ? "needs_attention"
-        : decision.priority === "monitor"
-          ? "monitoring"
-          : "active";
+    const runtimeStatus = decision.priority === "monitor"
+      ? "monitoring"
+      : "needs_attention";
 
     return {
       status: runtimeStatus,
@@ -96,11 +93,11 @@ export async function runAutonomousRuntime() {
       workflow,
 
       runtime: {
-        autonomous: awarenessScore >= 50 && workflow.success,
+        autonomous: false,
         monitoring: workflow.status !== "failed",
-        learning: weakSkills.length > 0,
-        selfImprovement: decision.priority !== "monitor",
-        actionTaken: decision.priority !== "monitor",
+        learning: false,
+        selfImprovement: false,
+        actionTaken: reflectionCreated || suggestionCreated,
         memoryLoad,
         awarenessScore,
       },

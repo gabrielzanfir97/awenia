@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { existsSync, lstatSync } from "node:fs";
 
 export type RollbackRisk = "low" | "medium" | "high" | "critical";
 
@@ -28,7 +29,46 @@ export type RollbackApprovalOptions = {
   reason?: string;
 };
 
-const PROJECT_ROOT = process.cwd();
+const PROJECT_ROOT = path.resolve(process.cwd());
+const BACKUP_ROOT = path.resolve(
+  process.env.USERPROFILE || path.dirname(PROJECT_ROOT),
+  "Awenia-Backups"
+);
+
+function resolveExternalBackupBasePath(projectFilePath: string) {
+  const absolutePath = path.resolve(BACKUP_ROOT, projectFilePath);
+  const relative = path.relative(BACKUP_ROOT, absolutePath);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("Backup path is outside the dedicated backup directory");
+  }
+  return absolutePath;
+}
+
+function assertSafeBackupPath(absolutePath: string) {
+  // Verify existing directory components and files without following symlinks.
+  const filesystemRoot = path.parse(absolutePath).root;
+  let current = filesystemRoot;
+  for (const part of path.relative(filesystemRoot, absolutePath).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    try {
+      const stats = lstatSync(current);
+      if (stats.isSymbolicLink()) {
+        throw new Error("Symbolic links are not allowed in backup paths");
+      }
+      if (current === absolutePath ? !stats.isFile() : !stats.isDirectory()) {
+        throw new Error("Unexpected file type in backup path");
+      }
+    } catch (error: any) {
+      if (error?.code === "ENOENT") break;
+      throw error;
+    }
+  }
+}
 
 const BLOCKED_PATHS = [
   ".env",
@@ -226,39 +266,40 @@ export function validateRollbackPath(filePath: string): RollbackValidation {
 
 function resolveBackupPath(targetFilePath: string, backupFilePath?: string) {
   const target = validateRollbackPath(targetFilePath);
+  if (!target.allowed) throw new Error(target.reason);
 
-  if (!target.allowed) {
-    throw new Error(target.reason);
-  }
+  const externalBase = resolveExternalBackupBasePath(target.normalizedPath);
+  const targetBaseName = path.basename(target.absolutePath);
 
   if (!backupFilePath) {
-    return `${target.absolutePath}.backup`;
+    const externalLatest = `${externalBase}.backup`;
+    const legacyLatest = `${target.absolutePath}.backup`;
+    const selected = existsSync(externalLatest) ? externalLatest : legacyLatest;
+    assertSafeBackupPath(selected);
+    return selected;
   }
 
-  const backupNormalized = normalizeProjectPath(backupFilePath);
-  const backupAbsolute = normalizeAbsolutePath(
-    path.resolve(PROJECT_ROOT, backupNormalized)
-  );
-
-  if (!isInsideProjectRoot(backupAbsolute)) {
-    throw new Error("Backup path is outside project root");
-  }
-
-  if (!backupNormalized.endsWith(".backup")) {
-    throw new Error("Backup file must end with .backup");
-  }
-
-  const targetBaseName = path.basename(target.absolutePath);
-  const backupBaseName = path.basename(backupAbsolute);
-
+  // Accept a backup from exactly the target's external or legacy directory.
+  // The absolute external paths produced by dev-agent and listBackups are valid.
+  const candidate = path.resolve(PROJECT_ROOT, String(backupFilePath).trim());
+  const directory = path.dirname(candidate);
   if (
-    backupBaseName !== `${targetBaseName}.backup` &&
-    !backupBaseName.startsWith(`${targetBaseName}.`)
+    directory !== path.dirname(externalBase) &&
+    directory !== path.dirname(target.absolutePath)
   ) {
-    throw new Error("Backup does not appear to belong to target file");
+    throw new Error("Backup path is not in an allowed directory for this file");
   }
 
-  return backupAbsolute;
+  const name = path.basename(candidate);
+  if (
+    name !== `${targetBaseName}.backup` &&
+    !(name.startsWith(`${targetBaseName}.`) && name.endsWith(".backup"))
+  ) {
+    throw new Error("Backup does not belong to the selected project file");
+  }
+
+  assertSafeBackupPath(candidate);
+  return candidate;
 }
 
 export async function createRollbackPoint(
@@ -266,42 +307,33 @@ export async function createRollbackPoint(
   label = "manual"
 ) {
   const validation = validateRollbackPath(filePath);
-
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
-  const exists = await fileExists(validation.absolutePath);
-
-  if (!exists) {
+  if (!validation.allowed) throw new Error(validation.reason);
+  if (!(await fileExists(validation.absolutePath))) {
     throw new Error(`File does not exist: ${validation.normalizedPath}`);
   }
 
   const content = await fs.readFile(validation.absolutePath, "utf8");
-
   const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const uniqueSuffix = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  const backupBase = resolveExternalBackupBasePath(validation.normalizedPath);
+  const timestampedBackupPath = `${backupBase}.${safeLabel}.${timestamp}.${uniqueSuffix}.backup`;
+  const latestBackupPath = `${backupBase}.backup`;
 
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-");
-
-  const timestampedBackupPath = `${validation.absolutePath}.${safeLabel}.${timestamp}.backup`;
-  const latestBackupPath = `${validation.absolutePath}.backup`;
-
-  await fs.writeFile(timestampedBackupPath, content, "utf8");
+  assertSafeBackupPath(timestampedBackupPath);
+  assertSafeBackupPath(latestBackupPath);
+  await fs.mkdir(path.dirname(backupBase), { recursive: true });
+  assertSafeBackupPath(timestampedBackupPath);
+  assertSafeBackupPath(latestBackupPath);
+  await fs.writeFile(timestampedBackupPath, content, { encoding: "utf8", flag: "wx" });
   await fs.writeFile(latestBackupPath, content, "utf8");
-
   const stat = await fs.stat(timestampedBackupPath);
 
   return {
     success: true,
     filePath: validation.normalizedPath,
-    backupPath: normalizeProjectPath(
-      path.relative(PROJECT_ROOT, timestampedBackupPath)
-    ),
-    latestBackupPath: normalizeProjectPath(
-      path.relative(PROJECT_ROOT, latestBackupPath)
-    ),
+    backupPath: timestampedBackupPath,
+    latestBackupPath,
     size: stat.size,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,
@@ -315,48 +347,51 @@ export async function createRollbackPoint(
 
 export async function listRollbackBackups(filePath: string) {
   const validation = validateRollbackPath(filePath);
+  if (!validation.allowed) throw new Error(validation.reason);
 
-  if (!validation.allowed) {
-    throw new Error(validation.reason);
-  }
-
-  const directory = path.dirname(validation.absolutePath);
   const targetBaseName = path.basename(validation.absolutePath);
-
-  const entries = await fs.readdir(directory, {
-    withFileTypes: true,
-  });
-
+  const externalDirectory = path.dirname(
+    resolveExternalBackupBasePath(validation.normalizedPath)
+  );
+  const legacyDirectory = path.dirname(validation.absolutePath);
   const backups: RollbackBackupInfo[] = [];
 
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
+  // Until the old copies are safely migrated, show BOTH locations.
+  for (const directory of [externalDirectory, legacyDirectory]) {
+    let entries;
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch (error: any) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
 
-    const isBackup =
-      entry.name === `${targetBaseName}.backup` ||
-      (entry.name.startsWith(`${targetBaseName}.`) &&
-        entry.name.endsWith(".backup"));
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const name = entry.name;
+      if (
+        name !== `${targetBaseName}.backup` &&
+        !(name.startsWith(`${targetBaseName}.`) && name.endsWith(".backup"))
+      ) continue;
 
-    if (!isBackup) continue;
-
-    const absoluteBackupPath = path.join(directory, entry.name);
-    const stat = await fs.stat(absoluteBackupPath);
-
-    backups.push({
-      filePath: validation.normalizedPath,
-      backupPath: normalizeProjectPath(
-        path.relative(PROJECT_ROOT, absoluteBackupPath)
-      ),
-      size: stat.size,
-      createdAt: stat.birthtime.toISOString(),
-      modifiedAt: stat.mtime.toISOString(),
-    });
+      const absoluteBackupPath = path.join(directory, name);
+      assertSafeBackupPath(absoluteBackupPath);
+      const stat = await fs.stat(absoluteBackupPath);
+      backups.push({
+        filePath: validation.normalizedPath,
+        backupPath: directory === externalDirectory
+          ? absoluteBackupPath
+          : normalizeProjectPath(path.relative(PROJECT_ROOT, absoluteBackupPath)),
+        size: stat.size,
+        createdAt: stat.birthtime.toISOString(),
+        modifiedAt: stat.mtime.toISOString(),
+      });
+    }
   }
 
   return backups.sort(
     (a, b) =>
-      new Date(b.modifiedAt).getTime() -
-      new Date(a.modifiedAt).getTime()
+      new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
   );
 }
 
@@ -464,12 +499,13 @@ export async function rollbackFile(
     throw new Error(`No backup found for ${validation.normalizedPath}`);
   }
 
+  // Save the selected backup before createRollbackPoint overwrites .backup.
+  const backupContent = await fs.readFile(backupAbsolutePath, "utf8");
+
   const beforeRollbackBackup = await createRollbackPoint(
     validation.normalizedPath,
     "before_rollback"
   );
-
-  const backupContent = await fs.readFile(backupAbsolutePath, "utf8");
 
   await fs.writeFile(validation.absolutePath, backupContent, "utf8");
 

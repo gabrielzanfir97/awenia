@@ -1,5 +1,5 @@
 import { makeAutonomousDecision } from "./decision-engine";
-import { executeAgentWorkflow } from "./agent-orchestrator";
+import { coordinateAgents } from "./agent-orchestrator";
 import { buildAwarenessState } from "./awareness";
 
 import {
@@ -46,7 +46,7 @@ export async function runSelfImprovementCycle() {
       activeGoals,
     });
 
-    const workflow = await executeAgentWorkflow(
+    const workflow = coordinateAgents(
       decision.priority,
       `${decision.action}. Reason: ${decision.reason}`
     );
@@ -78,7 +78,7 @@ export async function runSelfImprovementCycle() {
     }
 
     return {
-      status: workflow.success ? "completed" : "needs_attention",
+      status: suggestionCreated || reflectionCreated ? "planned" : "needs_attention",
 
       awareness,
 

@@ -1,4 +1,7 @@
-import { supabase, isSupabaseConfigured } from "./supabase";
+import { isSupabaseConfigured } from "./supabase";
+import { getSupabaseServer } from "./supabase-server";
+
+const supabase = getSupabaseServer();
 
 export type MemoryCategory =
   | "gabi"

@@ -224,7 +224,7 @@ export async function runIntelligenceCivilization(
       ecosystemStatus: ecosystem.status,
     });
 
-    createAgentBroadcast(
+    const broadcastResult = await createAgentBroadcast(
       "orchestrator",
       `Civilization decision: ${decision.action}`,
       decision.priority,
@@ -236,8 +236,44 @@ export async function runIntelligenceCivilization(
       }
     );
 
+    if (
+      broadcastResult.status !== "sent" ||
+      broadcastResult.count !== council.filter(
+        (member) => member.agentId !== "orchestrator"
+      ).length ||
+      broadcastResult.results.some((item) => item.status !== "sent")
+    ) {
+      throw new Error("Civilization broadcast was not fully queued");
+    }
+
     for (const member of council) {
-      communicateBetweenAgents(
+      await (async (
+        from: string,
+        to: string,
+        content: string,
+        priority: number,
+        eventType: string,
+        details: { distributionId: string; taskId: string }
+      ) => {
+        const sent = await communicateBetweenAgents(
+          from,
+          to,
+          content,
+          { priority, eventType, ...details },
+          eventType,
+          details
+        );
+
+        if (
+          sent.status !== "sent" ||
+          sent.savedRuntime !== true ||
+          sent.message?.to !== to
+        ) {
+          throw new Error(
+            `Civilization law check was not queued for ${to}`
+          );
+        }
+      })(
         "orchestrator",
         member.agentId,
         `Civilization law check: ${laws
@@ -390,5 +426,14 @@ export async function coordinateIntelligenceCivilization(task?: string) {
 }
 
 function createAgentBroadcast(arg0: string, arg1: string, priority: number, arg3: string, arg4: { area: string; risk: "low" | "medium" | "high" | "critical"; requiresGabiApproval: boolean; }) {
-  throw new Error("Function not implemented.");
+  return broadcastAgentMessage(
+  arg0,
+  Object.values(Agents).map((agent) => agent.id),
+  arg1,
+  {
+    priority,
+    eventType: arg3,
+    ...arg4,
+  }
+);
 }

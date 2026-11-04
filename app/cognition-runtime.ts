@@ -261,6 +261,19 @@ async function safeStep(
       buildTimeoutPromise(timeoutMs),
     ]);
 
+    const nestedStatus = (result as { status?: unknown } | null)?.status;
+    if (nestedStatus === "failed" || nestedStatus === "blocked") {
+      return {
+        name,
+        status: "failed",
+        required: Boolean(options?.required),
+        durationMs: Date.now() - started,
+        result,
+        error: `Step ${name} returned ${nestedStatus}`,
+        timestamp: now(),
+      };
+    }
+
     return {
       name,
       status: "completed",
@@ -724,7 +737,12 @@ export async function runCognitionRuntime(
     steps.push(
       await safeStep(
         "omniscient_cognition",
-        () => runOmniscientCognition(),
+        () => runOmniscientCognition(
+          undefined,
+          steps.find((step) =>
+            step.name === "global_cognition" && step.status === "completed"
+          )?.result
+        ),
         {
           required: false,
           timeoutMs,

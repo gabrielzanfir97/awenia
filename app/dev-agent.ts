@@ -63,6 +63,10 @@ export type DevAgentPatchResult = {
 };
 
 const PROJECT_ROOT = path.resolve(process.cwd());
+const BACKUP_ROOT = path.resolve(
+  process.env.USERPROFILE || path.dirname(PROJECT_ROOT),
+  "Awenia-Backups"
+);
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024;
 
 const READ_BLOCKED_PATHS = [
@@ -332,15 +336,47 @@ async function assertNoSymlinkPath(absolutePath: string) {
   }
 }
 
+function resolveBackupBasePath(projectFilePath: string) {
+  const backupBasePath = path.resolve(BACKUP_ROOT, projectFilePath);
+  const relative = path.relative(BACKUP_ROOT, backupBasePath);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("Backup path is outside the dedicated backup directory");
+  }
+  return backupBasePath;
+}
+
 async function assertSafeBackupTarget(backupPath: string) {
-  await assertNoSymlinkPath(backupPath);
-  try {
-    const stats = await fs.lstat(backupPath);
-    if (!stats.isFile() || stats.isSymbolicLink()) {
-      throw new Error("Backup target is not a safe regular file");
+  const relative = path.relative(BACKUP_ROOT, backupPath);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("Backup target is outside the dedicated backup directory");
+  }
+
+  // Inspect every existing path component: never follow directory symlinks.
+  let current = path.parse(BACKUP_ROOT).root;
+  for (const part of path.relative(current, backupPath).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    try {
+      const stats = await fs.lstat(current);
+      if (stats.isSymbolicLink()) {
+        throw new Error("Symbolic links are not allowed in backup paths");
+      }
+      if (current === backupPath ? !stats.isFile() : !stats.isDirectory()) {
+        throw new Error("Backup path contains an unexpected file type");
+      }
+    } catch (error: any) {
+      if (error?.code === "ENOENT") break;
+      throw error;
     }
-  } catch (error: any) {
-    if (error?.code !== "ENOENT") throw error;
   }
 }
 
@@ -369,15 +405,19 @@ export async function createFileBackup(filePath: string) {
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const uniqueSuffix = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  const archivePath = `${validation.absolutePath}.${timestamp}.${uniqueSuffix}.backup`;
-  const latestBackupPath = `${validation.absolutePath}.backup`;
+  const backupBasePath = resolveBackupBasePath(validation.normalizedPath);
+  const archivePath = `${backupBasePath}.${timestamp}.${uniqueSuffix}.backup`;
+  const latestBackupPath = `${backupBasePath}.backup`;
 
+  await assertSafeBackupTarget(archivePath);
+  await assertSafeBackupTarget(latestBackupPath);
+  await fs.mkdir(path.dirname(backupBasePath), { recursive: true });
   await assertSafeBackupTarget(archivePath);
   await assertSafeBackupTarget(latestBackupPath);
   await fs.writeFile(archivePath, content, { encoding: "utf8", flag: "wx" });
   await fs.writeFile(latestBackupPath, content, "utf8");
 
-  return normalizeProjectPath(path.relative(PROJECT_ROOT, archivePath));
+  return archivePath;
 }
 
 export async function readProjectFile(filePath: string) {
@@ -479,8 +519,22 @@ export async function rollbackProjectFile(
   assertWriteApproval(validation, options);
   await assertNoSymlinkPath(validation.absolutePath);
 
-  const latestBackupPath = `${validation.absolutePath}.backup`;
-  await assertSafeBackupTarget(latestBackupPath);
+  const externalBackupPath = `${resolveBackupBasePath(validation.normalizedPath)}.backup`;
+  const legacyBackupPath = `${validation.absolutePath}.backup`;
+  const useExternal = await fileExists(externalBackupPath);
+  const latestBackupPath = useExternal ? externalBackupPath : legacyBackupPath;
+  if (useExternal) {
+    await assertSafeBackupTarget(latestBackupPath);
+  } else {
+    // Keep older in-project backups available until they have been migrated.
+    await assertNoSymlinkPath(latestBackupPath);
+    if (await fileExists(latestBackupPath)) {
+      const stats = await fs.lstat(latestBackupPath);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error("Legacy backup is not a safe regular file");
+      }
+    }
+  }
   if (!(await fileExists(latestBackupPath))) {
     throw new Error(`No backup found for ${validation.normalizedPath}`);
   }
@@ -502,7 +556,7 @@ export async function rollbackProjectFile(
     success: true,
     action: "rollback" as const,
     filePath: validation.normalizedPath,
-    backupPath: normalizeProjectPath(path.relative(PROJECT_ROOT, latestBackupPath)),
+    backupPath: latestBackupPath,
     beforeRollbackBackup,
     risk: validation.risk,
     requiresApproval: validation.requiresApproval,

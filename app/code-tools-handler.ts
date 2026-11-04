@@ -1135,6 +1135,36 @@ export async function handleGeneratePatch(message: string) {
       });
     }
 
+    // Natural-language requests are handled by the AI coding proposal engine.
+    // Existing SEARCH/REPLACE requests retain the original preview behavior.
+    const requestedBlocks = parseSearchReplaceBlocks(body);
+
+    if (!requestedBlocks.searchText && !requestedBlocks.replacementText) {
+      const { prepareCoderProposal } = await import("./agent-orchestrator");
+      const coderResult = await prepareCoderProposal(filePath, body);
+
+      if (
+        coderResult.status !== "ready_for_review" ||
+        !coderResult.proposal
+      ) {
+        return response("GENERATE_PATCH", "failed", {
+          status: "failed",
+          agentId: "coder",
+          error: coderResult.error || "Coder proposal generation failed.",
+          noFileChanged: true,
+        });
+      }
+
+      const proposal = coderResult.proposal;
+
+      return response("GENERATE_PATCH", "completed", {
+        status: "completed",
+        proposal,
+        noFileChanged: true,
+        message: "AI proposal only. Review before queuing PATCH_FILE.",
+      });
+    }
+
     const blocks = parseSearchReplaceBlocks(body);
     const matchCount = blocks.searchText
       ? countOccurrences(currentContent, blocks.searchText)
@@ -1215,7 +1245,209 @@ export async function handleSearchInsideFiles(message: string) {
   }
 }
 
+export async function handlePatchBatch(message: string) {
+  try {
+    const input = JSON.parse(stripCommand(message, ["PATCH_BATCH"]));
+    const patches: unknown[] = input?.patches;
+    if (!Array.isArray(patches) || patches.length < 1 || patches.length > 20) {
+      return response("PATCH_BATCH", "needs_attention", {
+        status: "needs_attention", reason: "Provide 1 to 20 patches in JSON patches[].",
+      });
+    }
+
+    const staged = new Map<string, string>();
+    const prepared: Array<{
+      filePath: string; search: string; replace: string;
+      currentHash: string; risk: any; patch: string;
+    }> = [];
+
+    // Validate the entire batch before creating any pending actions.
+    for (const [index, item] of patches.entries()) {
+      const p = item as Record<string, unknown>;
+      const filePath = normalizePath(String(p?.filePath || ""));
+      const search = p?.search;
+      const replace = p?.replace;
+      if (!filePath || typeof search !== "string" || typeof replace !== "string" ||
+          !search || !replace || search === replace || search.length > 12000 || replace.length > 15000) {
+        return response("PATCH_BATCH", "needs_attention", {
+          status: "needs_attention", index, reason: "Invalid filePath/search/replace.",
+        });
+      }
+      const validation = validateProjectFilePath(filePath, "patch");
+      const safety = await analyzeProjectFileSafety(filePath);
+      if (!validation.allowed || !safety.canRead || safety.blocked) {
+        return response("PATCH_BATCH", "blocked", {
+          status: "blocked", filePath, validation, safety,
+        });
+      }
+      const key = filePath.toLowerCase();
+      const currentContent = staged.get(key) ?? await readProjectFile(filePath);
+      if (countOccurrences(currentContent, search) !== 1) {
+        return response("PATCH_BATCH", "needs_attention", {
+          status: "needs_attention", filePath,
+          reason: "SEARCH must match exactly once. No batch actions were queued.",
+        });
+      }
+      const patch = `SEARCH:\n${search}\n\nREPLACE:\n${replace}`;
+      const risk = analyzePendingActionRisk({
+        action_type: "PATCH_FILE", file_path: filePath, patch,
+        reason: "Awenia batch patch", source: "code-tools-handler",
+        requires_approval: true,
+      });
+      if (risk.blocked || risk.valid === false) {
+        return response("PATCH_BATCH", "blocked", { status: "blocked", filePath, risk });
+      }
+      prepared.push({
+        filePath, search, replace, patch, risk,
+        currentHash: hashContent(currentContent),
+      });
+      staged.set(key, currentContent.replace(search, () => replace));
+    }
+
+    const batchId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const pendingActionIds: string[] = [];
+    for (const [index, p] of prepared.entries()) {
+      let action: any;
+      try {
+        action = await savePendingAction({
+          action_type: "PATCH_FILE", file_path: p.filePath, patch: p.patch,
+          reason: "Awenia batch patch", source: "code-tools-handler",
+          requires_approval: true,
+          metadata: {
+            risk: p.risk, searchText: p.search, replacementText: p.replace,
+            createdByTool: "PATCH_BATCH", expectedFileExists: true,
+            expectedFileHash: p.currentHash, batchId,
+            batchSize: prepared.length, batchPosition: index,
+          },
+        });
+      } catch (error: any) {
+        return response("PATCH_BATCH", "needs_attention", {
+          status: "needs_attention", batchId, pendingActionIds,
+          error: error?.message || String(error),
+          message: "Some actions may be queued. No files changed.",
+        });
+      }
+      const saved = checkPendingActionSaved(action);
+      if (!saved.saved) {
+        return response("PATCH_BATCH", "needs_attention", {
+          status: "needs_attention", batchId, pendingActionIds,
+          error: action?.error || "Batch was only partially queued. No files changed.",
+        });
+      }
+      pendingActionIds.push(saved.actionId);
+    }
+    return response("PATCH_BATCH", "pending_approval", {
+      status: "pending_approval", batchId, pendingActionIds,
+      message: "Each action requires owner approval. No files changed.",
+      noFileChanged: true,
+      executeInstruction: `After approving all IDs: EXECUTE_PATCH_BATCH: ${pendingActionIds.join(",")}`,
+    });
+  } catch (error: any) {
+    return response("PATCH_BATCH", "failed", {
+      status: "failed", error: error?.message || String(error),
+    });
+  }
+}
+
+export async function handleExecutePatchBatch(message: string) {
+  try {
+    const ids = stripCommand(message, ["EXECUTE_PATCH_BATCH"])
+      .split(/[\s,]+/).filter(Boolean);
+    if (!ids.length || ids.length > 20 || new Set(ids).size !== ids.length ||
+        ids.some((id) => !/^\d+$/.test(id))) {
+      return response("EXECUTE_PATCH_BATCH", "needs_attention", {
+        status: "needs_attention", reason: "Provide 1 to 20 unique numeric pending action IDs.",
+      });
+    }
+
+    const items: Array<{
+      id: string; position: number; filePath: string; action: PendingActionRecord;
+    }> = [];
+    let batchId = "";
+    // All items must be approved and still valid before the first file write.
+    for (const id of ids) {
+      const check = await getExecutablePendingAction(id, ["PATCH_FILE"]);
+      const action = check.action;
+      if (!check.allowed || !action) {
+        return response("EXECUTE_PATCH_BATCH", "blocked", {
+          status: "blocked", id, reason: check.reason, noFileChanged: true,
+        });
+      }
+      const meta = action.metadata || {};
+      const filePath = normalizePath(action.file_path);
+      if (!meta.batchId || meta.createdByTool !== "PATCH_BATCH" ||
+          meta.batchSize !== ids.length ||
+          (batchId && batchId !== meta.batchId) ||
+          !Number.isInteger(meta.batchPosition)) {
+        return response("EXECUTE_PATCH_BATCH", "blocked", {
+          status: "blocked", id, reason: "Invalid or incomplete batch group.",
+          noFileChanged: true,
+        });
+      }
+      batchId = meta.batchId;
+      items.push({ id, position: meta.batchPosition, filePath, action });
+    }
+    items.sort((a, b) => a.position - b.position);
+    if (items.some((item, index) => item.position !== index)) {
+      return response("EXECUTE_PATCH_BATCH", "blocked", {
+        status: "blocked", reason: "Batch contains missing or repeated positions.",
+        noFileChanged: true,
+      });
+    }
+
+    // Simulate the approved order in memory, including multiple edits per file.
+    const staged = new Map<string, string>();
+    for (const item of items) {
+      const key = item.filePath.toLowerCase();
+      const firstForFile = !staged.has(key);
+      const current = staged.get(key) ?? await readProjectFile(item.filePath);
+      const blocks = getPatchBlocksFromPendingAction(item.action);
+      const meta = item.action.metadata || {};
+      const validation = validateProjectFilePath(item.filePath, "patch");
+      const precondition = firstForFile
+        ? await checkFilePrecondition(item.action, item.filePath)
+        : { allowed: true };
+      if (!validation.allowed || !precondition.allowed ||
+          meta.expectedFileHash !== hashContent(current) ||
+          !blocks.searchText || !blocks.replacementText ||
+          blocks.searchText === blocks.replacementText ||
+          countOccurrences(current, blocks.searchText) !== 1) {
+        return response("EXECUTE_PATCH_BATCH", "blocked", {
+          status: "blocked", id: item.id, filePath: item.filePath,
+          reason: "Batch preflight failed: source hash or SEARCH mismatch.",
+          noFileChanged: true,
+        });
+      }
+      staged.set(key, current.replace(blocks.searchText, () => blocks.replacementText));
+    }
+
+    const completed: Array<{ id: string; filePath: string }> = [];
+    for (const item of items) {
+      const result = await handleExecutePatchFile(`EXECUTE_PATCH_FILE: ${item.id}`);
+      const payload: any = await result.json();
+      if (payload.status !== "completed") {
+        return response("EXECUTE_PATCH_BATCH", "needs_attention", {
+          status: "needs_attention", batchId, completed,
+          stoppedAt: item, failure: payload.data,
+          message: "Execution stopped. Earlier files may have changed; inspect before resuming.",
+        });
+      }
+      completed.push({ id: item.id, filePath: item.filePath });
+    }
+    return response("EXECUTE_PATCH_BATCH", "completed", {
+      status: "completed", batchId, completed,
+      message: "All approved patches applied sequentially with existing dev-agent backups.",
+    });
+  } catch (error: any) {
+    return response("EXECUTE_PATCH_BATCH", "failed", {
+      status: "failed", error: error?.message || String(error),
+    });
+  }
+}
+
 export async function handleCodeToolCommand(message: string) {
+  if (matchesCommand(message, "PATCH_BATCH")) return handlePatchBatch(message);
+  if (matchesCommand(message, "EXECUTE_PATCH_BATCH")) return handleExecutePatchBatch(message);
   const commandRoutes: Array<{ names: string[]; handler: (message: string) => Promise<Response> }> = [
     { names: ["LIST_FILES", "LIST_PROJECT_FILES"], handler: handleListFiles },
     { names: ["READ_REAL_FILE", "READ_FILE"], handler: handleReadRealFile },

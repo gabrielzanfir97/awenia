@@ -50,6 +50,7 @@ export type AgentChannel = {
 
 const runtimeMessages: AgentMessage[] = [];
 const runtimeChannels: AgentChannel[] = [];
+let blockedMessageCount = 0;
 
 function now() {
   return new Date().toISOString();
@@ -170,9 +171,23 @@ export async function sendAgentMessage(
 
   if (message.status !== "blocked") {
     runtimeMessages.unshift(message);
+    // Cap volatile runtime telemetry to avoid unbounded memory growth.
+    if (runtimeMessages.length > 1000) runtimeMessages.length = 1000;
   }
 
-  if (
+  if (message.status === "blocked") {
+    // Blocked content may contain credentials. Do not persist the original text.
+    blockedMessageCount += 1;
+    try {
+      await createEvolutionSuggestion({
+        suggestion: "Review blocked agent communication",
+        reason: "An inter-agent message was blocked by safety checks; its content was not saved.",
+        priority: 9,
+        status: "pending",
+        metadata: { from, to, source: "agent-communication" },
+      });
+    } catch { /* Logging is best effort, delivery remains blocked. */ }
+  } else if (
     message.priority === "high" ||
     message.priority === "critical" ||
     message.type === "error"
@@ -180,28 +195,10 @@ export async function sendAgentMessage(
     try {
       await createAutonomousReflection(
         `Agent message: ${from} -> ${to}`,
-        content,
-        message.priority === "critical"
-          ? "Critical agent message requires Gabi review."
-          : "Important agent message saved for awareness."
+        `Message type: ${message.type}; priority: ${message.priority}. Content kept in volatile runtime only.`,
+        "Review message in the active agent runtime if available."
       );
-    } catch { }
-  }
-
-  if (message.status === "blocked") {
-    try {
-      await createEvolutionSuggestion({
-        suggestion: "Review blocked agent communication",
-        reason: content,
-        priority: 9,
-        status: "pending",
-        metadata: {
-          from,
-          to,
-          source: "agent-communication",
-        },
-      });
-    } catch { }
+    } catch { /* Logging is best effort, in-memory delivery already occurred. */ }
   }
 
   return {
@@ -229,7 +226,7 @@ export async function broadcastAgentMessage(
   }
 
   return {
-    status: "sent",
+    status: results.some((item) => item.status !== "sent") ? "failed" : "sent",
     from,
     agents,
     results,
@@ -378,7 +375,7 @@ export async function sendChannelMessage(
   );
 
   return {
-    status: "sent" as AgentMessageStatus,
+    status: broadcast.status === "sent" ? "sent" as AgentMessageStatus : "failed" as AgentMessageStatus,
     channel,
     broadcast,
     timestamp: now(),
@@ -453,9 +450,7 @@ export function getAgentCommunicationState() {
     status: "received",
     messages: runtimeMessages.length,
     channels: runtimeChannels.length,
-    blockedMessages: runtimeMessages.filter(
-      (message) => message.status === "blocked"
-    ).length,
+    blockedMessages: blockedMessageCount,
     highPriorityMessages: runtimeMessages.filter(
       (message) =>
         message.priority === "high" ||
@@ -514,9 +509,7 @@ export function getAgentCommunicationStats() {
     status: "received",
     totalMessages: runtimeMessages.length,
     totalChannels: runtimeChannels.length,
-    blockedMessages: runtimeMessages.filter(
-      (message) => message.status === "blocked"
-    ).length,
+    blockedMessages: blockedMessageCount,
     highPriorityMessages: runtimeMessages.filter(
       (message) =>
         message.priority === "high" ||

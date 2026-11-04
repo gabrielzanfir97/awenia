@@ -36,11 +36,14 @@ async function safeRead<T>(
   fallback: T
 ) {
   try {
+    const data = await reader();
+    const nestedStatus = (data as { status?: unknown } | null)?.status;
     return {
       name,
-      data: await reader(),
-      status: "connected",
-      error: null,
+      data,
+      status: nestedStatus === "failed" || nestedStatus === "blocked" ? "failed" : "connected",
+      error: nestedStatus === "failed" || nestedStatus === "blocked"
+        ? `${name} returned status ${nestedStatus}` : null,
     };
   } catch (error: any) {
     return {

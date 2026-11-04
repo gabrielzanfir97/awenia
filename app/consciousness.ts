@@ -11,9 +11,19 @@ async function safeRead<T>(
   fallback: T
 ) {
   try {
+    const data = await reader();
+    const nestedStatus = (data as { status?: unknown } | null)?.status;
+    if (nestedStatus === "failed" || nestedStatus === "blocked") {
+      return {
+        name,
+        data,
+        status: "failed" as ConsciousnessReadStatus,
+        error: `${name} returned ${nestedStatus}`,
+      };
+    }
     return {
       name,
-      data: await reader(),
+      data,
       status: "connected" as ConsciousnessReadStatus,
       error: null,
     };
