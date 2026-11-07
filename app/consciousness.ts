@@ -180,6 +180,14 @@ export async function buildConsciousnessState() {
       timestamp: new Date().toISOString(),
       snapshot: {
         createdAt: new Date().toISOString(),
+        countScope: "recent_sample",
+        sampleLimits: {
+          memories: 50,
+          summaries: 20,
+          goals: 20,
+          reports: 20,
+        },
+        databaseReadsVerified: false,
         memoryHealth: "empty",
         strongestArea: "none",
         recommendedFocus: "general",

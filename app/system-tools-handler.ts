@@ -360,7 +360,281 @@ export async function handleOmniscientCognition() {
   }
 }
 
+export async function handleCheckVirtualComputer() {
+  try {
+    const baseUrl = "http://127.0.0.1:38472";
+
+    const [healthResponse, componentsResponse] = await Promise.all([
+      fetch(`${baseUrl}/health`, {
+        signal: AbortSignal.timeout(3000),
+        cache: "no-store",
+      }),
+      fetch(`${baseUrl}/components`, {
+        signal: AbortSignal.timeout(3000),
+        cache: "no-store",
+      }),
+    ]);
+
+    if (!healthResponse.ok || !componentsResponse.ok) {
+      throw new Error("Virtual Computer V4 HTTP connection failed");
+    }
+
+    const health = await healthResponse.json();
+    const components = await componentsResponse.json();
+
+    if (
+      health?.status !== "ready" ||
+      health?.service !== "awenia_virtual_computer_v4" ||
+      components?.status !== "completed" ||
+      !components?.components
+    ) {
+      throw new Error("Virtual Computer V4 returned invalid data");
+    }
+
+    return jsonResponse(
+      createResult("CHECK_VIRTUAL_COMPUTER", {
+        connected: true,
+        health,
+        components: components.components,
+        warning: "Connection verified; individual components may still be inactive.",
+        timestamp: now(),
+      })
+    );
+  } catch (error: any) {
+    return jsonResponse(
+      createErrorResult("CHECK_VIRTUAL_COMPUTER", error)
+    );
+  }
+}
+
+export async function handleRunVirtualComputer(message: string) {
+  const tool = "VIRTUAL_COMPUTER_RUN";
+
+  try {
+    const raw = message.slice("VIRTUAL_COMPUTER_RUN:".length).trim();
+
+    if (!raw || raw.length > 16000) {
+      throw new Error("Invalid request size");
+    }
+
+    const input = JSON.parse(raw);
+
+    if (input?.channel === "io.text") {
+      const text = input?.payload?.text;
+
+      if (
+        typeof text !== "string" ||
+        !text.trim() ||
+        text.length > 2000
+      ) {
+        throw new Error("Invalid IO text");
+      }
+
+      const response = await fetch("http://127.0.0.1:38472/io/text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(10000),
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Virtual IO HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (
+        data?.status === "failed" ||
+        data?.status === "blocked"
+      ) {
+        throw new Error(data?.error || "Virtual IO failed");
+      }
+
+      return jsonResponse(
+        createResult(tool, {
+          channel: "io.text",
+          execution: data,
+          timestamp: now(),
+        })
+      );
+    }
+
+    const allowedChannels = [
+      "cpu.run",
+      "gpu.run",
+      "ram.read",
+      "ssd.get",
+      "network.health",
+    ];
+
+    if (!allowedChannels.includes(input?.channel)) {
+      throw new Error("Channel not allowed");
+    }
+
+    if (
+      input.channel === "gpu.run" &&
+      !["capabilities", "integerSum"].includes(input?.payload?.request?.op)
+    ) {
+      throw new Error("GPU operation not allowed");
+    }
+
+    const response = await fetch("http://127.0.0.1:38472/dispatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channel: input.channel,
+        payload: input.payload ?? {},
+      }),
+      signal: AbortSignal.timeout(30000),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Virtual Computer HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (data?.status !== "completed") {
+      throw new Error(data?.error || "Virtual computer execution failed");
+    }
+
+    return jsonResponse(
+      createResult(tool, {
+        channel: input.channel,
+        execution: data,
+        timestamp: now(),
+      })
+    );
+  } catch (error: any) {
+    return jsonResponse(createErrorResult(tool, error));
+  }
+}
+
+export async function handleCoderProposal(message: string) {
+  const tool = "CODER_PROPOSAL";
+
+  try {
+    const raw = message.slice("CODER_PROPOSAL:".length).trim();
+
+    if (!raw || raw.length > 8000) {
+      throw new Error("Invalid coder request size");
+    }
+
+    const input = JSON.parse(raw);
+
+    if (
+      typeof input?.filePath !== "string" ||
+      typeof input?.task !== "string" ||
+      !input.filePath.trim() ||
+      !input.task.trim() ||
+      input.filePath.length > 250 ||
+      input.task.length > 4000
+    ) {
+      throw new Error("Valid filePath and task are required");
+    }
+
+    const { prepareCoderProposal } = await import("./agent-orchestrator");
+
+    const result = await prepareCoderProposal(
+      input.filePath,
+      input.task
+    );
+
+    if (
+      result.status !== "ready_for_review" ||
+      !result.proposal ||
+      result.fileChanged !== false ||
+      result.requiresApproval !== true
+    ) {
+      throw new Error(result.error || "Coder proposal failed");
+    }
+
+    return jsonResponse(
+      createResult(tool, {
+        status: "ready_for_review",
+        proposal: result.proposal,
+        fileChanged: false,
+        requiresApproval: true,
+        timestamp: now(),
+      })
+    );
+  } catch (error: any) {
+    return jsonResponse(createErrorResult(tool, error));
+  }
+}
+
+export async function handleAgentWorkflow(message: string) {
+  const tool = "RUN_AGENT_WORKFLOW";
+
+  try {
+    const clean = message.trim();
+    const raw = clean.slice("RUN_AGENT_WORKFLOW:".length).trim();
+
+    if (!raw || raw.length > 5000) {
+      throw new Error("Invalid agent workflow request size");
+    }
+
+    const input = JSON.parse(raw);
+
+    const allowedTypes = [
+      "planning",
+      "coding",
+      "debug",
+      "memory",
+      "research",
+      "goal",
+      "monitor",
+    ];
+
+    if (
+      typeof input?.taskType !== "string" ||
+      typeof input?.taskDetail !== "string" ||
+      !allowedTypes.includes(input.taskType.trim().toLowerCase()) ||
+      !input.taskDetail.trim() ||
+      input.taskDetail.length > 4000
+    ) {
+      throw new Error("Invalid agent workflow task");
+    }
+
+    const { executeAgentWorkflow } = await import(
+      "./agent-orchestrator"
+    );
+
+    const result = await executeAgentWorkflow(
+      input.taskType.trim().toLowerCase(),
+      input.taskDetail.trim()
+    );
+
+    return jsonResponse(
+      createResult(
+        tool,
+        result,
+        result.status === "completed" ||
+        result.status === "ready_for_review"
+          ? "completed"
+          : "failed"
+      )
+    );
+  } catch (error: any) {
+    return jsonResponse(createErrorResult(tool, error));
+  }
+}
+
 export async function handleSystemToolCommand(message: string) {
+  if (message.trim().toUpperCase().startsWith("RUN_AGENT_WORKFLOW:")) {
+    return handleAgentWorkflow(message);
+  }
+  if (message.trim().toUpperCase().startsWith("CODER_PROPOSAL:")) {
+    return handleCoderProposal(message);
+  }
+  if (message.trim().toUpperCase().startsWith("VIRTUAL_COMPUTER_RUN:")) {
+    return handleRunVirtualComputer(message);
+  }
+  if (String(message || "").trim().toUpperCase() === "CHECK_VIRTUAL_COMPUTER") {
+    return handleCheckVirtualComputer();
+  }
   const clean = message.trim();
   const upper = clean.toUpperCase();
 
@@ -449,6 +723,10 @@ export function isSystemToolCommand(message: string) {
     upper.startsWith("TASK_PLAN:") ||
     upper.startsWith("CHECK_AWENIA_STATUS") ||
     upper.startsWith("RUN_AUTONOMOUS_TESTS") ||
+    upper === "CHECK_VIRTUAL_COMPUTER" ||
+    upper.startsWith("VIRTUAL_COMPUTER_RUN:") ||
+    upper.startsWith("CODER_PROPOSAL:") ||
+    upper.startsWith("RUN_AGENT_WORKFLOW:") ||
     upper.startsWith("CHECK_INTERNET_SYSTEM") ||
     upper.startsWith("CHECK_SUPABASE_SYSTEM") ||
     upper.startsWith("CHECK_MEMORY_SYSTEM") ||

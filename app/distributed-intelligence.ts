@@ -20,7 +20,8 @@ export type DistributedTaskStatus =
   | "assigned"
   | "running"
   | "completed"
-  | "failed";
+  | "failed"
+  | "ready_for_review";
 
 export type DistributedTask = {
   id: string;
@@ -29,6 +30,10 @@ export type DistributedTask = {
   status: DistributedTaskStatus;
   priority: number;
   result?: string;
+  proposal?: import("./self-coding-v6").CodingProposal;
+  debugAnalysis?: import("./self-debug").DebugAnalysis;
+  requiresApproval?: boolean;
+  fileChanged?: boolean;
   confidence?: number;
   startedAt?: string;
   completedAt?: string;
@@ -127,6 +132,9 @@ function buildDistributedTasks(
 }
 
 function detectOverallStatus(tasks: DistributedTask[]) {
+  if (tasks.some((task) => task.status === "ready_for_review")) {
+    return "ready_for_review";
+  }
   const failed = tasks.filter((task) => task.status === "failed");
   const completed = tasks.filter((task) => task.status === "completed");
 
@@ -159,11 +167,36 @@ export async function runDistributedIntelligence(
     ].join("\n");
 
     const selectedAgents = findBestAgentsForTask(reasoningText, 5);
+    if (task.trim().startsWith("{")) {
+      try {
+        const codingInput = JSON.parse(task);
+        if (
+          codingInput &&
+          typeof codingInput.filePath === "string" &&
+          codingInput.filePath.trim() &&
+          typeof codingInput.task === "string" &&
+          codingInput.task.trim() &&
+          !selectedAgents.some((agent) => agent.id === "coder")
+        ) {
+          const orchestratorIndex = selectedAgents.findIndex(
+            (agent) => agent.id === "orchestrator"
+          );
+          if (orchestratorIndex >= 0) {
+            selectedAgents.splice(orchestratorIndex, 1);
+          } else if (selectedAgents.length >= 5) {
+            selectedAgents.pop();
+          }
+          selectedAgents.push(Agents.coder);
+        }
+      } catch {
+        // Invalid JSON does not force coder selection.
+      }
+    }
 
     const finalAgents = selectedAgents.some(
       (agent) => agent.id === "orchestrator"
     )
-      ? selectedAgents
+      ? [...selectedAgents.filter((agent) => agent.id !== "orchestrator"), Agents.orchestrator]
       : [...selectedAgents, Agents.orchestrator];
 
     const tasks = buildDistributedTasks(
@@ -227,14 +260,46 @@ export async function runDistributedIntelligence(
       distributedTask.startedAt = new Date().toISOString();
 
       const result = await agent.execute(
+        distributedTask.assignedAgent === "orchestrator"
+          ? `ORCHESTRATOR_FINALIZE_JSON:${JSON.stringify({
+              workflowId: distributionId,
+              steps: tasks
+                .filter((item) => item.assignedAgent !== "orchestrator")
+                .map((item) => ({
+                  agentId: item.assignedAgent,
+                  status: item.status,
+                })),
+            })}`
+          : distributedTask.assignedAgent === "coder" &&
+              task.trim().startsWith("{")
+            ? `CODER_PROPOSAL_JSON:${task.trim()}`
+            : distributedTask.assignedAgent === "researcher"
+            ? `RESEARCH_QUERY:${task.slice(0, 300)}`
+            : distributedTask.assignedAgent === "debugger"
+              ? `DEBUG_ANALYSIS_TEXT:${task.slice(0, 4000)}`
+              : distributedTask.assignedAgent === "memory"
+                ? `MEMORY_SEARCH:${task.slice(0, 300)}`
+                :
         distributedTask.task,
         distributionId
       );
 
       distributedTask.status =
-        result.status === "completed" ? "completed" : "failed";
+        result.status === "completed"
+          ? "completed"
+          : result.status === "ready_for_review" &&
+              distributedTask.assignedAgent === "coder" &&
+              result.proposal &&
+              result.fileChanged === false &&
+              result.requiresApproval === true
+            ? "ready_for_review"
+            : "failed";
 
       distributedTask.result = result.result;
+      distributedTask.proposal = result.proposal;
+      distributedTask.debugAnalysis = result.debugAnalysis;
+      distributedTask.requiresApproval = result.requiresApproval;
+      distributedTask.fileChanged = result.fileChanged;
       distributedTask.confidence = result.confidence;
       distributedTask.completedAt = new Date().toISOString();
 
@@ -261,6 +326,13 @@ export async function runDistributedIntelligence(
       );
 
       messages.push(`${agent.id}: ${result.result}`);
+
+      if (distributedTask.status === "ready_for_review") {
+        messages.push(
+          "Workflow stopped at ready_for_review. Gabi approval is required before further execution."
+        );
+        break;
+      }
     }
 
     const confidence = calculateConfidence(tasks);

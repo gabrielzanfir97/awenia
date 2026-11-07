@@ -10,7 +10,8 @@ import {
 export type AIProviderName =
   | "local"
   | "ollama"
-  | "awenia_local";
+  | "awenia_local"
+  | "awenia_virtual";
 
 export type AIProviderRouterStatus =
   | "configured"
@@ -67,6 +68,7 @@ function normalizeProvider(provider?: string): AIProviderName {
 
   const lower = provider.toLowerCase().trim();
 
+  if (lower === "awenia_virtual") return "awenia_virtual";
   if (lower === "ollama") return "ollama";
   if (lower === "awenia_local") return "awenia_local";
   if (lower === "local") return "local";
@@ -223,6 +225,86 @@ export async function routeAIProvider(
         model,
         error: connection.error || "Local AI connection failed",
         reason: "Connection check failed before chat call",
+      });
+    }
+  }
+
+  if (selectedProvider === "awenia_virtual") {
+    try {
+      const userMessage = [...messages]
+        .reverse()
+        .find((message) => message?.role === "user");
+
+      const prompt = String(userMessage?.content || "").trim();
+
+      if (!prompt) {
+        throw new Error("Missing user prompt");
+      }
+
+      const response = await fetch("http://127.0.0.1:38471/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: prompt.slice(0, 1000),
+          maxNewTokens: 2,
+        }),
+        signal: AbortSignal.timeout(
+          Math.min(options.timeoutMs || 180000, 180000)
+        ),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Virtual engine HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (
+        data?.status !== "completed" ||
+        typeof data?.reply !== "string" ||
+        !data.reply.trim()
+      ) {
+        throw new Error(data?.error || "Virtual engine returned no reply");
+      }
+
+      const reply = `[TEST AVC V6]\n${data.reply}`;
+
+      return {
+        status: "completed",
+        provider: "awenia_virtual",
+        selectedProvider,
+        model: data.model || "AVC V6",
+        reply,
+        content: reply,
+        choices: [{
+          message: {
+            role: "assistant",
+            content: reply,
+          },
+        }],
+        raw: data,
+        verified: true,
+        routing: {
+          externalProvidersAllowed: false,
+          localOnly: true,
+          reason: "Experimental Awenia Virtual Engine",
+        },
+        truthPolicy: {
+          noFakeProviderStatus: true,
+          noExternalProviderUnlessAllowed: true,
+          localProviderMustBeCheckedWithFetch: true,
+          noClaimAIResponseWithoutModelReply: true,
+        },
+        timestamp: now(),
+      };
+    } catch (error: any) {
+      console.error("Virtual engine failed:", error?.message);
+
+      return buildFailure({
+        provider: selectedProvider,
+        model,
+        error: error?.message || "Virtual engine failed",
+        reason: "Experimental virtual engine failed",
       });
     }
   }

@@ -67,9 +67,9 @@ function extractAffectedFiles(errorText: string) {
   const files: string[] = [];
 
   const patterns = [
-    /(app[\/\\][A-Za-z0-9_\-./\\]+\.(?:ts|tsx|js|jsx))/g,
-    /(\.[\/\\]app[\/\\][A-Za-z0-9_\-./\\]+\.(?:ts|tsx|js|jsx))/g,
-    /([A-Za-z]:[\/\\][A-Za-z0-9_\- .\/\\]+[\/\\]app[\/\\][A-Za-z0-9_\-./\\]+\.(?:ts|tsx|js|jsx))/g,
+    /(app[\/\\][A-Za-z0-9_\-./\\]+\.(?:tsx|jsx|ts|js)(?![A-Za-z0-9_]))/g,
+    /(\.[\/\\]app[\/\\][A-Za-z0-9_\-./\\]+\.(?:tsx|jsx|ts|js)(?![A-Za-z0-9_]))/g,
+    /([A-Za-z]:[\/\\][A-Za-z0-9_\- .\/\\]+[\/\\]app[\/\\][A-Za-z0-9_\-./\\]+\.(?:tsx|jsx|ts|js)(?![A-Za-z0-9_]))/g,
   ];
 
   for (const pattern of patterns) {
@@ -79,6 +79,7 @@ function extractAffectedFiles(errorText: string) {
           match[1]
             .replace(/\\/g, "/")
             .replace(/^\.\//, "")
+            .replace(/^.*?(?=app\/)/, "")
         );
       }
     }
@@ -136,21 +137,21 @@ function detectErrorType(errorText: string): DebugErrorType {
   }
 
   if (
-    text.includes("typescript") ||
-    text.includes("ts") ||
-    text.includes("tsc") ||
-    text.includes("type checking")
-  ) {
-    return "typescript";
-  }
-
-  if (
     text.includes("next build") ||
     text.includes("failed to compile") ||
     text.includes("compiled with errors") ||
     text.includes("build failed")
   ) {
     return "next_build";
+  }
+
+  if (
+    text.includes("typescript") ||
+    /\bts\d{4}\b/.test(text) ||
+    text.includes("tsc") ||
+    text.includes("type checking")
+  ) {
+    return "typescript";
   }
 
   if (
@@ -209,7 +210,7 @@ function detectSeverity(
         "app/protected-core.ts",
         "app/dev-agent.ts",
         "app/pending-actions.ts",
-      ].some((risky) => file.includes(risky))
+      ].some((risky) => file === risky)
     )
   ) {
     return "high";
@@ -414,10 +415,7 @@ export function analyzeError(errorText = ""): DebugAnalysis {
       severity,
     }),
     safeToAutoFix: false,
-    requiresGabiApproval:
-      severity === "medium" ||
-      severity === "high" ||
-      severity === "critical",
+    requiresGabiApproval: true,
     truthPolicy: {
       noGuessingWithoutError: true,
       noClaimFixedWithoutPatch: true,

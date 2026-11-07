@@ -34,6 +34,14 @@ async function safeRead<T>(
         error: `${name} returned ${nestedStatus}`,
       };
     }
+    if (["partial", "degraded", "needs_verification"].includes(String(nestedStatus))) {
+      return {
+        name,
+        data,
+        status: "unverified",
+        error: `${name} returned ${nestedStatus}`,
+      };
+    }
     return {
       name,
       data,
@@ -162,6 +170,14 @@ export async function runMetaCognition(context: any = {}) {
         },
         snapshot: {
           createdAt: "",
+          countScope: "recent_sample",
+          sampleLimits: {
+            memories: 50,
+            summaries: 20,
+            goals: 20,
+            reports: 20,
+          },
+          databaseReadsVerified: false,
           memoryHealth: "unknown",
           strongestArea: "",
           recommendedFocus: "",
@@ -213,11 +229,24 @@ export async function runMetaCognition(context: any = {}) {
     const memory = memoryResult.data;
     const goals = goalsResult.data;
 
-    const sourceFailures = [
-      awarenessResult,
-      memoryResult,
-      goalsResult,
-    ].filter((item) => item.status === "failed").length;
+    const sourceFailures =
+      Math.max(
+        awarenessResult.status === "failed" ? 1 : 0,
+        Number(awareness.awareness?.metrics?.sourceFailures) || 0,
+        0
+      ) +
+      Math.max(
+        memoryResult.status === "failed" ? 1 : 0,
+        Array.isArray(memory.memoryAnalysis?.readErrors)
+          ? memory.memoryAnalysis.readErrors.length
+          : 0
+      ) +
+      Math.max(
+        goalsResult.status === "failed" ? 1 : 0,
+        goals.source?.status === "failed"
+          ? 1
+          : 0
+      );
 
 
     const awarenessScore = awareness.awareness?.awarenessScore || 0;
@@ -225,8 +254,8 @@ export async function runMetaCognition(context: any = {}) {
     const pendingUpgrades =
       awareness.awareness?.pendingUpgrades?.length || 0;
     const activeGoals =
-      goals.goalAnalysis?.totalActiveGoals ||
-      awareness.awareness?.activeGoals?.length ||
+      goals.goalAnalysis?.totalActiveGoals ??
+      awareness.awareness?.activeGoals?.length ??
       0;
 
     const memoryLoad =
@@ -254,23 +283,44 @@ export async function runMetaCognition(context: any = {}) {
       lastFailureCount: sourceFailures,
     });
 
+    const requestText =
+      typeof context?.message === "string"
+        ? context.message
+        : typeof context?.distributedTask === "string"
+          ? context.distributedTask
+          : "";
+
     const workflowPlan = coordinateAgents(
       decision.priority,
-      `${decision.action}. Reason: ${decision.reason}`
+      [
+        requestText ? `User request: ${requestText.slice(0, 700)}` : "",
+        `Decision action: ${decision.action}`,
+        `Decision reason: ${decision.reason}`,
+      ].filter(Boolean).join("\n")
     );
 
     const knowledge: KnowledgeItem[] = [];
 
     addKnowledge(knowledge, {
       area: "awareness",
-      status: awareness.awareness?.verified ? "verified" : "estimated",
+      status:
+        awarenessResult.status === "failed"
+          ? "failed"
+          : awarenessResult.status === "connected" && awareness.awareness?.verified === true
+            ? "verified"
+            : "estimated",
       evidence: awareness.awareness?.primaryProblem || "No awareness evidence",
       confidence: awareness.awareness?.confidence || awarenessScore,
     });
 
     addKnowledge(knowledge, {
       area: "memory",
-      status: memory.memoryAnalysis?.verified ? "verified" : "estimated",
+      status:
+        memoryResult.status === "failed"
+          ? "failed"
+          : memoryResult.status === "connected" && memory.memoryAnalysis?.verified === true
+            ? "verified"
+            : "estimated",
       evidence:
         memory.memoryAnalysis?.memoryHealth ||
         "Memory health unavailable",
@@ -284,7 +334,15 @@ export async function runMetaCognition(context: any = {}) {
 
     addKnowledge(knowledge, {
       area: "goals",
-      status: goals.hasRealGoals ? "verified" : "unknown",
+      status:
+        goalsResult.status === "failed"
+          ? "failed"
+          : goalsResult.status === "connected" &&
+              goals.source?.verified === true
+            ? "verified"
+            : goals.hasRealGoals
+              ? "estimated"
+              : "unknown",
       evidence: goals.activeMission || "No active mission detected",
       confidence: goals.hasRealGoals ? 80 : 30,
     });
@@ -292,7 +350,7 @@ export async function runMetaCognition(context: any = {}) {
     addKnowledge(knowledge, {
       area: "agents",
       status: "verified",
-      evidence: `${getAgentState().length} agents available`,
+      evidence: `${getAgentState().length} agents registered; real execution not verified`,
       confidence: 75,
     });
 
@@ -325,9 +383,14 @@ export async function runMetaCognition(context: any = {}) {
         )
         : 0;
 
+    const unverifiedSourceCount = knowledge.filter(
+      (item) => ["awareness", "memory", "goals"].includes(item.area) &&
+        item.status !== "verified"
+    ).length;
+
     const status = calculateMetaStatus({
       sourceFailures,
-      unknownCount: unknowns.length,
+      unknownCount: Math.max(unknowns.length, unverifiedSourceCount),
       confidence,
     });
 
@@ -337,11 +400,11 @@ export async function runMetaCognition(context: any = {}) {
       metaCognition: {
         selfCheck: {
           identity: "Awenia",
-          canTrustOwnState:
-            sourceFailures === 0 && unknowns.length === 0,
+          canTrustOwnState: status === "clear",
           confidence,
           sourceFailures,
           unknownCount: unknowns.length,
+          unverifiedSourceCount,
         },
 
         verifiedKnowledge,

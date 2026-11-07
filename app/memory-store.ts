@@ -43,8 +43,10 @@ function createId(prefix = "memory") {
 }
 
 function clampImportance(value: any) {
-  const number = Number(value || 4);
-  return Math.max(1, Math.min(10, Math.round(number)));
+  const number = Number(value ?? 4);
+  return Number.isFinite(number)
+    ? Math.max(1, Math.min(10, Math.round(number)))
+    : 4;
 }
 
 function normalize(text = "") {
@@ -61,7 +63,10 @@ function sortNewest(items: any[]) {
 }
 
 function limitItems<T>(items: T[], limit = 50) {
-  return items.slice(0, limit);
+  const safeLimit = Number.isFinite(limit)
+    ? Math.max(0, Math.floor(limit))
+    : 50;
+  return items.slice(0, safeLimit);
 }
 
 const runtimeMemories: MemoryRecord[] = [];
@@ -195,7 +200,11 @@ async function safeSelect(
       ascending: options?.ascending ?? false,
     });
 
-    query = query.limit(options?.limit || 50);
+    const requestedLimit = Number(options?.limit ?? 50);
+    const queryLimit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(500, Math.floor(requestedLimit)))
+      : 50;
+    query = query.limit(queryLimit);
 
     const { data, error } = await query;
 
@@ -290,17 +299,34 @@ export async function saveMemory(
   };
 }
 
-export async function getRecentMemories(limit = 50) {
+async function loadRecentMemories(limit = 50) {
   const supabaseResult = await safeSelect("memories", {
     limit,
     orderBy: "created_at",
   });
 
   const stored = (supabaseResult.data || []).map(normalizeMemory);
+  const memoryKey = (record: MemoryRecord) =>
+    JSON.stringify([
+      record.created_at,
+      record.user_message,
+      record.awenia_reply,
+      record.category,
+    ]);
+  const runtimeKeys = new Set(runtimeMemories.map(memoryKey));
+  const uniqueStored = stored.filter(
+    (record: MemoryRecord) => !runtimeKeys.has(memoryKey(record))
+  );
 
-  const merged = sortNewest([...runtimeMemories, ...stored]);
+  return {
+    records: limitItems(sortNewest([...runtimeMemories, ...uniqueStored]), limit),
+    databaseStatus: supabaseResult.status,
+    databaseError: supabaseResult.error,
+  };
+}
 
-  return limitItems(merged, limit);
+export async function getRecentMemories(limit = 50) {
+  return (await loadRecentMemories(limit)).records;
 }
 
 export async function searchMemories(query = "", limit = 20) {
@@ -319,19 +345,75 @@ export async function searchMemories(query = "", limit = 20) {
   );
 }
 
+export async function readLongTermMemorySources() {
+  const [memoriesRead, summariesRead, goalsRead, reportsRead] = await Promise.all([
+    loadRecentMemories(50),
+    safeSelect("memory_summaries", { limit: 20, orderBy: "created_at" }),
+    safeSelect("autonomous_goals", { limit: 20, orderBy: "created_at" }),
+    safeSelect("evolution_reports", { limit: 20, orderBy: "created_at" }),
+  ]);
+
+  const makeSource = (
+    data: any[],
+    databaseStatus: StoreStatus,
+    error?: string | null
+  ) => ({
+    data,
+    status:
+      databaseStatus === "loaded"
+        ? data.length === 0 ? "empty" : "connected"
+        : databaseStatus === "fallback"
+          ? "fallback"
+          : "failed",
+    verified: databaseStatus === "loaded",
+    error: error ?? null,
+  });
+
+  return {
+    memories: makeSource(
+      memoriesRead.records,
+      memoriesRead.databaseStatus,
+      memoriesRead.databaseError
+    ),
+    summaries: makeSource(
+      limitItems(sortNewest([...runtimeSummaries, ...(summariesRead.data || [])]), 20),
+      summariesRead.status,
+      summariesRead.error
+    ),
+    goals: makeSource(
+      limitItems(sortNewest([...runtimeGoals, ...(goalsRead.data || [])]), 20),
+      goalsRead.status,
+      goalsRead.error
+    ),
+    reports: makeSource(
+      limitItems(sortNewest([...runtimeEvolutionReports, ...(reportsRead.data || [])]), 20),
+      reportsRead.status,
+      reportsRead.error
+    ),
+  };
+}
+
 export async function getMemoryCategoryStats(limit = 500) {
-  const memories = await getRecentMemories(limit);
-  const stats: Record<string, number> = {};
+  const { records: memories, databaseStatus, databaseError } =
+    await loadRecentMemories(limit);
+  const stats: Record<string, number> = Object.create(null);
 
   for (const memory of memories) {
     const category = memory.category || "general";
     stats[category] = (stats[category] || 0) + 1;
   }
 
+  const categories = Object.entries(stats)
+    .map(([category, count]) => ({ category, count }))
+    .sort((left, right) => right.count - left.count);
+
   return {
     ...stats,
+    categories,
     _total: memories.length,
     _source: "memory-store",
+    _databaseStatus: databaseStatus,
+    _databaseError: databaseError,
     _timestamp: now(),
   };
 }

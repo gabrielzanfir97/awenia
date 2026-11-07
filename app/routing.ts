@@ -362,7 +362,7 @@ function isSimpleShortMessage(message: string) {
 
   return (
     clean.length > 0 &&
-    clean.length <= 20 &&
+    ["ok", "hai", "ok hai"].includes(clean) &&
     !clean.includes(":") &&
     !clean.includes("cod") &&
     !clean.includes("code") &&

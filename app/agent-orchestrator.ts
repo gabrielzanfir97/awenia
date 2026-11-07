@@ -12,6 +12,7 @@ import {
   broadcastAgentMessage,
   getAgentCommunicationState,
   getAgentCommunicationStats,
+  getWorkflowAgentMessages,
 } from "./agent-communication";
 
 export type AgentWorkflowStep = {
@@ -21,6 +22,10 @@ export type AgentWorkflowStep = {
   task: string;
   status: AgentStatus;
   result?: string;
+  proposal?: import("./self-coding-v6").CodingProposal;
+  debugAnalysis?: import("./self-debug").DebugAnalysis;
+  requiresApproval?: boolean;
+  fileChanged?: boolean;
   confidence?: number;
   startedAt?: string;
   completedAt?: string;
@@ -34,10 +39,13 @@ export type AgentWorkflowResult = {
   workflow: string[];
   steps: AgentWorkflowStep[];
   messages: string[];
+  workflowMessages?: ReturnType<typeof getWorkflowAgentMessages>["messages"];
   agentState: ReturnType<typeof getAgentState>;
   communicationStats: ReturnType<typeof getAgentCommunicationStats>;
   status: AgentStatus;
   success: boolean;
+  requiresApproval?: boolean;
+  fileChanged?: boolean;
   confidence: number;
   startedAt: string;
   completedAt?: string;
@@ -124,7 +132,10 @@ function buildAgentTask(
 function calculateWorkflowConfidence(steps: AgentWorkflowStep[]) {
   if (steps.length === 0) return 0;
 
-  const confidenceValues = steps.map((step) => step.confidence || 0.5);
+  const confidenceValues = steps
+    .filter((step) => typeof step.confidence === "number")
+    .map((step) => step.confidence as number);
+  if (confidenceValues.length === 0) return 0;
   const total = confidenceValues.reduce((sum, value) => sum + value, 0);
 
   return Number((total / confidenceValues.length).toFixed(2));
@@ -138,7 +149,29 @@ export function coordinateAgents(
   const taskGoal = buildTaskGoal(taskType, taskDetail);
 
   const selectedAgents = ensureOrchestratorLast(
-    findBestAgentsForTask(taskGoal, 4)
+    (() => {
+      const specialistByTaskType: Partial<Record<string, AgentName>> = {
+        planning: "planner",
+        coding: "coder",
+        code: "coder",
+        debug: "debugger",
+        memory: "memory",
+        research: "researcher",
+        goal: "planner",
+        monitor: "planner",
+        upgrade: "planner",
+      };
+
+      const specialistId = specialistByTaskType[normalize(taskType)];
+
+      if (!specialistId) {
+        return findBestAgentsForTask(taskGoal, 4);
+      }
+
+      return specialistId === "planner"
+        ? [Agents.planner]
+        : [Agents.planner, Agents[specialistId]];
+    })()
   );
 
   const steps: AgentWorkflowStep[] = selectedAgents.map((agent, index) => ({
@@ -157,6 +190,9 @@ export function coordinateAgents(
     workflow: steps.map((step) => step.task),
     steps,
     messages: [],
+    get workflowMessages() {
+      return getWorkflowAgentMessages(workflowId, 20).messages;
+    },
     agentState: getAgentState(),
     communicationStats: getAgentCommunicationStats(),
     status: "idle",
@@ -303,10 +339,50 @@ export async function executeAgentWorkflow(
       }
     );
 
-    const result = await agent.execute(step.task, workflow.workflowId);
+    const agentTask =
+      step.agentId === "researcher" &&
+      normalize(taskType) === "research" &&
+      taskDetail.trim().length > 0
+        ? `RESEARCH_QUERY:${taskDetail.trim().slice(0, 300)}`
+        : step.agentId === "memory" &&
+            normalize(taskType) === "memory" &&
+            taskDetail.trim().length > 0
+          ? `MEMORY_SEARCH:${taskDetail.trim().slice(0, 300)}`
+          : step.agentId === "debugger" &&
+              normalize(taskType) === "debug" &&
+              taskDetail.trim().length > 0
+            ? `DEBUG_ANALYSIS_TEXT:${taskDetail.trim().slice(0, 4000)}`
+            : step.task;
+
+    const executionTask =
+      step.agentId === "orchestrator"
+        ? `ORCHESTRATOR_FINALIZE_JSON:${JSON.stringify({
+            workflowId: workflow.workflowId,
+            steps: workflow.steps
+              .filter((item) => item.agentId !== "orchestrator")
+              .map((item) => ({
+                agentId: item.agentId,
+                status: item.status,
+              })),
+          })}`
+        : step.agentId === "coder" &&
+            ["coding", "code"].includes(normalize(taskType)) &&
+            taskDetail.trim().startsWith("{")
+          ? `CODER_PROPOSAL_JSON:${taskDetail.trim()}`
+          : agentTask;
+
+    const result = await agent.execute(executionTask, workflow.workflowId);
 
     step.status = result.status;
     step.result = result.result;
+    step.proposal = result.proposal;
+    step.debugAnalysis = result.debugAnalysis;
+    step.requiresApproval = result.requiresApproval;
+    step.fileChanged = result.fileChanged;
+    workflow.requiresApproval = workflow.steps.some(
+      (item) => item.requiresApproval === true || item.status === "ready_for_review"
+    );
+    workflow.fileChanged = workflow.steps.some((item) => item.fileChanged === true);
     step.confidence = result.confidence;
     step.completedAt = new Date().toISOString();
 
@@ -363,6 +439,7 @@ export async function executeAgentWorkflow(
       taskType,
       confidence: workflow.confidence,
       success: workflow.success,
+        selectedAgents: workflow.activeAgents.map((agent) => agent.id),
     }
   );
 
@@ -401,7 +478,7 @@ async function createAgentBroadcast(
   message: string,
   priority: number,
   type: string,
-  meta: { workflowId: string; taskType: string; confidence: number; success: boolean }
+  meta: { workflowId: string; taskType: string; confidence: number; success: boolean; selectedAgents?: string[] }
 ) {
   const recipients = Object.keys(Agents);
   const result = await broadcastAgentMessage(from, recipients, message, {

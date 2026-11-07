@@ -26,6 +26,14 @@ async function safeRead<T>(
         error: `${name} returned ${nestedStatus}`,
       };
     }
+    if (["partial", "degraded", "needs_attention", "needs_verification"].includes(String(nestedStatus))) {
+      return {
+        name,
+        data,
+        status: "unverified",
+        error: `${name} returned ${nestedStatus}`,
+      };
+    }
     return {
       name,
       data,
@@ -62,10 +70,12 @@ function calculateLayerStatus(input: {
   awarenessScore: number;
   memoryHealth?: string;
   goalStatus?: string;
+  sourcesVerified: boolean;
 }): CognitiveLayerStatus {
   if (input.sourceFailures >= 2) return "failed";
 
   if (input.sourceFailures === 1) return "degraded";
+  if (!input.sourcesVerified) return "needs_attention";
 
   if (
     input.awarenessScore < 50 ||
@@ -113,12 +123,12 @@ export async function buildCognitiveArchitecture() {
           protection: ""
         },
         sourceStatuses: {
-          memoryStats: "connected",
-          autonomousGoals: "connected",
-          autonomousPriorities: "connected",
-          skillLevels: "connected",
-          evolutionSuggestions: "connected",
-          personalityTraits: "connected"
+          memoryStats: "failed",
+          autonomousGoals: "failed",
+          autonomousPriorities: "failed",
+          skillLevels: "failed",
+          evolutionSuggestions: "failed",
+          personalityTraits: "failed"
         },
         sourceErrors: [],
         memoryStats: [],
@@ -148,10 +158,10 @@ export async function buildCognitiveArchitecture() {
         compressionNeeded: false,
         verified: false,
         readStatuses: {
-          memories: "connected",
-          summaries: "connected",
-          goals: "connected",
-          reports: "connected"
+          memories: "failed",
+          summaries: "failed",
+          goals: "failed",
+          reports: "failed"
         },
         readErrors: [],
         dominantMemoryAreas: [],
@@ -164,7 +174,7 @@ export async function buildCognitiveArchitecture() {
       },
       status: "empty",
       continuity: { identity: "", learning: "", optimization: "", protection: "" },
-      snapshot: { createdAt: "", memoryHealth: "", strongestArea: "", recommendedFocus: "", totalMemories: 0, totalSummaries: 0, totalGoals: 0, totalReports: 0, compressionNeeded: false, duplicateCount: 0 },
+      snapshot: { createdAt: "", countScope: "recent_sample", sampleLimits: { memories: 50, summaries: 20, goals: 20, reports: 20 }, databaseReadsVerified: false, memoryHealth: "", strongestArea: "", recommendedFocus: "", totalMemories: 0, totalSummaries: 0, totalGoals: 0, totalReports: 0, compressionNeeded: false, duplicateCount: 0 },
       execution: { startedAt: "", completedAt: "" },
       timestamp: ""
     }
@@ -203,19 +213,38 @@ export async function buildCognitiveArchitecture() {
   const memory = memoryResult.data;
   const goals = goalsResult.data;
 
-  const sourceFailures = [
-    awarenessResult,
-    memoryResult,
-    goalsResult,
-  ].filter((item) => item.status === "failed").length;
+  const sourceFailures =
+    Math.max(
+      awarenessResult.status === "failed" ? 1 : 0,
+      Number(awareness.awareness?.metrics?.sourceFailures) || 0
+    ) +
+    Math.max(
+      memoryResult.status === "failed" ? 1 : 0,
+      Array.isArray(memory.memoryAnalysis?.readErrors)
+        ? memory.memoryAnalysis.readErrors.length
+        : 0
+    ) +
+    (goalsResult.status === "failed" ||
+    goals.source?.status === "failed" ||
+    (goals.health as { status?: string } | undefined)?.status === "failed"
+      ? 1
+      : 0);
+
+  const sourcesVerified =
+    awarenessResult.status === "connected" &&
+    awareness.awareness?.verified === true &&
+    memoryResult.status === "connected" &&
+    memory.memoryAnalysis?.verified === true &&
+    goalsResult.status === "connected" &&
+    goals.source?.verified === true;
 
   const awarenessScore = awareness.awareness?.awarenessScore || 0;
   const weakSkills = awareness.awareness?.weakSkills || [];
   const pendingUpgrades =
     awareness.awareness?.pendingUpgrades?.length || 0;
   const activeGoals =
-    goals.goalAnalysis?.totalActiveGoals ||
-    awareness.awareness?.activeGoals?.length ||
+    goals.goalAnalysis?.totalActiveGoals ??
+    awareness.awareness?.activeGoals?.length ??
     0;
 
   const memoryLoad = calculateMemoryLoad(memory);
@@ -237,6 +266,7 @@ export async function buildCognitiveArchitecture() {
 
   const status = calculateLayerStatus({
     sourceFailures,
+    sourcesVerified,
     awarenessScore,
     memoryHealth: memory.memoryAnalysis?.memoryHealth,
     goalStatus: goals.status,
@@ -246,7 +276,7 @@ export async function buildCognitiveArchitecture() {
     architecture: {
       status,
 
-      verified: sourceFailures === 0,
+      verified: sourcesVerified && sourceFailures === 0,
 
       confidence: Math.max(
         0,
@@ -279,6 +309,7 @@ export async function buildCognitiveArchitecture() {
         },
 
         decision: {
+          verified: (decision as { verified?: boolean }).verified === true,
           priority: decision.priority,
           action: decision.action,
           reason: decision.reason,
@@ -290,6 +321,8 @@ export async function buildCognitiveArchitecture() {
         },
 
         agents: {
+          planOnly: true,
+          agentsExecuted: false,
           plannedWorkflowId: workflowPlan.workflowId,
           plannedStatus: workflowPlan.status,
           selectedAgents: workflowPlan.activeAgents.map((agent) => ({
@@ -340,8 +373,9 @@ export async function optimizeCognitiveArchitecture() {
   return {
     status:
       architecture.architecture.status === "active"
-        ? "optimized"
+        ? "analysis_completed"
         : "needs_attention",
+    optimizationApplied: false,
 
     architecture,
 

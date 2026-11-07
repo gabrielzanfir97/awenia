@@ -57,6 +57,7 @@ function calculateStatus(input: {
   conflicts: ReasoningConflict[];
   confidence: number;
   sourceFailures: number;
+  unverifiedFindings: number;
 }): ReasoningStatus {
   if (input.sourceFailures > 0) return "needs_verification";
 
@@ -69,7 +70,9 @@ function calculateStatus(input: {
     return "conflicted";
   }
 
-  if (input.confidence < 60) return "needs_verification";
+  if (input.conflicts.length > 0 || input.unverifiedFindings > 0 || input.confidence < 60) {
+    return "needs_verification";
+  }
 
   return "clear";
 }
@@ -96,7 +99,7 @@ export async function runReasoningNetwork(context: any = {}) {
     addFinding(findings, {
       area: "awareness",
       conclusion:
-        awarenessLayer.primaryProblem || "No awareness problem detected",
+        awarenessLayer.primaryProblem || "Awareness status unknown",
       evidence: `Awareness score: ${awarenessLayer.score || 0}`,
       confidence: awarenessLayer.score || 0,
       verified: architectureData.verified === true,
@@ -128,7 +131,7 @@ export async function runReasoningNetwork(context: any = {}) {
       conclusion: decisionLayer.action || "No decision action",
       evidence: decisionLayer.reason || "No decision reason",
       confidence: decisionLayer.confidence || 0,
-      verified: true,
+      verified: decisionLayer.verified === true,
     });
 
     addFinding(findings, {
@@ -181,7 +184,7 @@ export async function runReasoningNetwork(context: any = {}) {
       });
     }
 
-    if (!agentsLayer.selectedAgents || agentsLayer.selectedAgents.length === 0) {
+    if (!Array.isArray(agentsLayer.selectedAgents) || agentsLayer.selectedAgents.length === 0) {
       addConflict(conflicts, {
         area: "agents",
         issue: "No agents selected for reasoning workflow",
@@ -189,10 +192,11 @@ export async function runReasoningNetwork(context: any = {}) {
       });
     }
 
-    const sourceFailures =
-      architectureData.cognitiveState?.sourceFailures ||
-      metaData.selfCheck?.sourceFailures ||
-      0;
+    const sourceFailures = Math.max(
+      0,
+      Number(architectureData.cognitiveState?.sourceFailures) || 0,
+      Number(metaData.selfCheck?.sourceFailures) || 0
+    );
 
     const confidence = calculateReasoningConfidence(findings);
 
@@ -200,6 +204,7 @@ export async function runReasoningNetwork(context: any = {}) {
       conflicts,
       confidence,
       sourceFailures,
+      unverifiedFindings: findings.filter((finding) => !finding.verified).length,
     });
 
     const finalConclusion =
@@ -214,9 +219,22 @@ export async function runReasoningNetwork(context: any = {}) {
         ? conflicts[0].issue
         : decisionLayer.action || metaData.recommendedAction || "Continue monitoring";
 
+    const requestText =
+      typeof context?.message === "string"
+        ? context.message
+        : typeof context?.distributedTask === "string"
+          ? context.distributedTask
+          : "";
+
     const workflowPlan = coordinateAgents(
-      decisionLayer.priority || "reasoning",
-      `${recommendedAction}. Conclusion: ${finalConclusion}`
+      typeof context?.activeSkill === "string" && context.activeSkill.trim()
+        ? context.activeSkill
+        : decisionLayer.priority || "reasoning",
+      [
+        requestText ? `User request: ${requestText.slice(0, 700)}` : "",
+        `Recommendation: ${recommendedAction}`,
+        `Conclusion: ${finalConclusion}`,
+      ].filter(Boolean).join("\n")
     );
 
     return {
@@ -248,7 +266,7 @@ export async function runReasoningNetwork(context: any = {}) {
         },
 
         agents: {
-          selectedAgents: agentsLayer.selectedAgents || [],
+          selectedAgents: Array.isArray(agentsLayer.selectedAgents) ? agentsLayer.selectedAgents : [],
           workflowSteps: agentsLayer.workflowSteps || [],
           workflowPlan,
         },

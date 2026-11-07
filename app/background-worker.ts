@@ -337,6 +337,14 @@ export async function runBackgroundWorker(
         },
         snapshot: {
           createdAt: "",
+          countScope: "recent_sample",
+          sampleLimits: {
+            memories: 50,
+            summaries: 20,
+            goals: 20,
+            reports: 20,
+          },
+          databaseReadsVerified: false,
           memoryHealth: "empty",
           strongestArea: "",
           recommendedFocus: "",

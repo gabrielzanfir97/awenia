@@ -1,9 +1,4 @@
-import {
-  getRecentMemories,
-  getMemorySummaries,
-  getAutonomousGoals,
-  getEvolutionReports,
-} from "./memory-store";
+import { readLongTermMemorySources } from "./memory-store";
 
 type MemoryReadStatus = "connected" | "empty" | "failed";
 
@@ -33,7 +28,7 @@ async function safeRead<T>(
 }
 
 function countByCategory(memories: any[]) {
-  const categories: Record<string, number> = {};
+  const categories: Record<string, number> = Object.create(null);
 
   for (const memory of memories) {
     const category = memory.category || "general";
@@ -49,7 +44,7 @@ function countByCategory(memories: any[]) {
 }
 
 function countByEmotion(memories: any[]) {
-  const emotions: Record<string, number> = {};
+  const emotions: Record<string, number> = Object.create(null);
 
   for (const memory of memories) {
     const emotion = memory.emotional_state || "neutral";
@@ -83,7 +78,7 @@ function detectPossibleDuplicates(memories: any[]) {
     seen.add(normalized);
   }
 
-  return duplicates.slice(0, 10);
+  return duplicates;
 }
 
 function calculateMemoryHealth(input: {
@@ -131,25 +126,29 @@ function buildMemoryTimeline(memories: any[]) {
 export async function buildLongTermMemory() {
   const startedAt = new Date().toISOString();
 
-  const memoriesResult = await safeRead(
-    () => getRecentMemories(50),
-    []
+  const failedSource = {
+    data: [] as any[],
+    status: "failed",
+    verified: false,
+    error: "Long-term memory source read failed",
+  };
+
+  const sourcesRead = await safeRead(
+    () => readLongTermMemorySources(),
+    {
+      memories: failedSource,
+      summaries: failedSource,
+      goals: failedSource,
+      reports: failedSource,
+    }
   );
 
-  const summariesResult = await safeRead(
-    () => getMemorySummaries(20),
-    []
-  );
-
-  const goalsResult = await safeRead(
-    () => getAutonomousGoals(20),
-    []
-  );
-
-  const reportsResult = await safeRead(
-    () => getEvolutionReports(20),
-    []
-  );
+  const {
+    memories: memoriesResult,
+    summaries: summariesResult,
+    goals: goalsResult,
+    reports: reportsResult,
+  } = sourcesRead.data;
 
   const memories: any[] = memoriesResult.data;
   const summaries: any[] = summariesResult.data;
@@ -171,8 +170,19 @@ export async function buildLongTermMemory() {
   ].filter(Boolean);
 
   const readFailures = Object.values(readStatuses).filter(
-    (status) => status === "failed"
+    (status) => status === "failed" || status === "fallback"
   ).length;
+
+  const sourcesVerified = [
+    memoriesResult,
+    summariesResult,
+    goalsResult,
+    reportsResult,
+  ].every(
+    (source) =>
+      source.verified === true &&
+      (source.status === "connected" || source.status === "empty")
+  );
 
   const dominantMemoryAreas = countByCategory(memories).slice(0, 5);
   const emotionalMemoryMap = countByEmotion(memories).slice(0, 5);
@@ -222,7 +232,7 @@ export async function buildLongTermMemory() {
     memoryAnalysis: {
       memoryHealth,
 
-      verified: readFailures === 0,
+      verified: sourcesVerified,
 
       readStatuses,
 
@@ -249,34 +259,30 @@ export async function buildLongTermMemory() {
 
     continuity: {
       identity:
-        criticalMemories.length > 0 || memories.length > 0
-          ? "persistent"
-          : "weak",
-
+        memories.length > 0 ? "records_present" : "not_observed",
       learning:
         summaries.length > 0 || reports.length > 0
-          ? "continuous"
-          : memories.length > 0
-            ? "starting"
-            : "inactive",
-
+          ? "learning_artifacts_present"
+          : "not_verified",
       optimization:
         reports.length > 0
-          ? "active"
+          ? "reports_present"
           : compressionNeeded
             ? "needed"
-            : "idle",
-
-      protection:
-        readFailures === 0 && criticalMemories.length > 0
-          ? "stable"
-          : readFailures === 0
-            ? "partial"
-            : "degraded",
+            : "not_verified",
+      protection: "not_checked",
     },
 
     snapshot: {
       createdAt: new Date().toISOString(),
+      countScope: "recent_sample",
+      sampleLimits: {
+        memories: 50,
+        summaries: 20,
+        goals: 20,
+        reports: 20,
+      },
+      databaseReadsVerified: sourcesVerified,
       memoryHealth,
       strongestArea,
       recommendedFocus,
@@ -291,9 +297,11 @@ export async function buildLongTermMemory() {
     status:
       readFailures > 0
         ? "degraded"
-        : memories.length > 0
+        : memoryHealth === "healthy"
           ? "stable"
-          : "empty",
+          : memories.length === 0
+            ? "empty"
+            : "partial",
 
     execution: {
       startedAt,

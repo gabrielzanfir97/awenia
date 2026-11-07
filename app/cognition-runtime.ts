@@ -147,8 +147,7 @@ function isSimpleMessage(message = "") {
     clean === "ok" ||
     clean === "da" ||
     clean === "nu" ||
-    clean === "ok hai" ||
-    clean.length <= 12
+    clean === "ok hai"
   );
 }
 
@@ -158,6 +157,11 @@ function shouldRunHeavy(input: CognitionRuntimeInput) {
   if (input.mode === "full") return true;
   if (input.includeDeepCognition) return true;
   if (isSimpleMessage(input.message || "")) return false;
+
+  const request = normalize(input.message || "");
+  if (/^(debug|repara|repară|fix|eroare|error|scrie cod|genereaza cod|generează cod|coding|code|implementeaza|implementează|patch)(\s|:|$)/.test(request)) {
+    return true;
+  }
 
   const skill = normalize(input.activeSkill || "");
 
@@ -262,7 +266,7 @@ async function safeStep(
     ]);
 
     const nestedStatus = (result as { status?: unknown } | null)?.status;
-    if (nestedStatus === "failed" || nestedStatus === "blocked") {
+    if (["failed", "blocked", "partial", "needs_attention"].includes(String(nestedStatus))) {
       return {
         name,
         status: "failed",
@@ -279,7 +283,9 @@ async function safeStep(
       status: "completed",
       required: Boolean(options?.required),
       durationMs: Date.now() - started,
-      result,
+      result: name === "agent_workflow" && nestedStatus === "idle"
+        ? { ...(result as object), planOnly: true, agentsExecuted: false }
+        : result,
       timestamp: now(),
     };
   } catch (error: any) {
@@ -311,7 +317,8 @@ function summarizeSteps(steps: CognitionStepResult[]) {
 }
 
 function getStepResult(steps: CognitionStepResult[], name: string) {
-  return steps.find((step) => step.name === name)?.result || null;
+  const step = steps.find((item) => item.name === name);
+  return step?.status === "completed" ? (step.result ?? null) : null;
 }
 
 function buildRecommendation(input: {
@@ -332,7 +339,7 @@ function buildRecommendation(input: {
     return "A fost rulat cognition light. Sistemele grele au fost sărite intenționat.";
   }
 
-  return "Cognition runtime a rulat și poate fi folosit ca context verificat intern.";
+  return "Cognition runtime a rulat. Verifică statusul fiecărui pas; planurile și rezultatele nevalidate nu confirmă execuția efectivă.";
 }
 
 export function buildCognitionRuntimePlan(
@@ -560,13 +567,76 @@ export async function runCognitionRuntime(
 
     steps.push(
       await safeStep(
+        "reasoning_network",
+        async () => {
+          const { runReasoningNetwork } = await import("./reasoning-network");
+
+          return runReasoningNetwork({
+            message: input.message || "",
+            activeSkill: input.activeSkill || "general",
+          });
+        },
+        {
+          required: false,
+          timeoutMs,
+          skip:
+            !runDeep &&
+            !/cod|code|debug|eroare|analiz|arhitectur|planific|proiect|raționament|rationament/i.test(
+              input.message || ""
+            ),
+          skipReason:
+            "Reasoning Network skipped because no complex reasoning request was detected.",
+        }
+      )
+    );
+
+    steps.push(
+      await safeStep(
         "agent_workflow",
         () =>
           coordinateAgents(
-            decision?.priority ||
+            (() => {
+              const skill = normalize(input.activeSkill || "");
+              const request = normalize(input.message || "");
+
+              if (decision?.risk === "critical") {
+                return decision.priority;
+              }
+
+              if (
+                ["debug", "coding", "memory", "research", "planning", "goal", "upgrade"].includes(skill)
+              ) {
+                return skill;
+              }
+
+              if (/^(debug|repara|repară|fix|eroare|error)(\s|:|$)/.test(request)) {
+                return "debug";
+              }
+
+              if (/^(scrie cod|genereaza cod|generează cod|code|coding|implementeaza|implementează|patch)(\s|:|$)/.test(request)) {
+                return "coding";
+              }
+
+              if (/^(cauta|caută|research|documenteaza|documentează)(\s|:|$)/.test(request)) {
+                return "research";
+              }
+
+              if (/^(planifica|planifică|planning)(\s|:|$)/.test(request)) {
+                return "planning";
+              }
+
+              return decision?.priority;
+            })() ||
             decision?.decision?.priority ||
             input.activeSkill ||
-            "monitor"
+            "monitor",
+            [
+              `User request: ${(input.message || "").slice(0, 750)}`,
+              `Decision action: ${decision?.action || "none"}`,
+              `Decision reason: ${decision?.reason || "not available"}`,
+              `Decision risk: ${decision?.risk || "unknown"}`,
+              `Decision urgency: ${decision?.urgency || "unknown"}`,
+            ].join("\n").slice(0, 1000)
           ),
         {
           required: false,
@@ -848,6 +918,7 @@ export async function runCognitionRuntime(
         workflow: getStepResult(steps, "agent_workflow"),
       },
       optional: {
+        reasoningNetwork: getStepResult(steps, "reasoning_network"),
         internetLearning: getStepResult(steps, "internet_learning"),
         selfImprovement: getStepResult(steps, "self_improvement"),
         autonomousRuntime: getStepResult(steps, "autonomous_runtime"),

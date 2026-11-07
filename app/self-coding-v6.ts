@@ -86,7 +86,7 @@ export async function createCodingProposal(
   }
 
   const safety = await analyzeProjectFileSafety(cleanPath);
-  if (!safety.canRead || safety.blocked) {
+  if (!safety.canRead || safety.canWriteWithApproval !== true || safety.blocked) {
     throw new Error("File cannot be safely inspected.");
   }
 
@@ -231,13 +231,20 @@ export async function createCodingProposal(
         );
       }
       // The replacement adopts the exact newline style of the matched text.
-      const replacementText = uniqueSearch.includes("\r\n")
+      const matchedUsesCrLf = uniqueSearch.includes("\r\n");
+      const matchedUsesLf = uniqueSearch.includes("\n");
+      const useCrLf = matchedUsesCrLf ||
+        (!matchedUsesLf && originalCode.includes("\r\n"));
+      const replacementText = useCrLf
         ? proposal.replace.replace(/\r?\n/g, "\r\n")
         : proposal.replace.replace(/\r\n/g, "\n");
       const proposedCode = originalCode.replace(
         uniqueSearch,
         () => replacementText
       );
+      if (proposedCode === originalCode) {
+        throw new Error("Proposal does not change source after newline normalization.");
+      }
 
       // Refuse stale proposals if another process changed the file.
       const latestCode = await readProjectFile(cleanPath);

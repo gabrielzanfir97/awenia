@@ -21,12 +21,25 @@ async function safeRead<T>(
 ): Promise<SafeResult<T>> {
   try {
     const data = await reader();
-
+    if (data == null) {
+      throw new Error("Awareness source returned no data.");
+    }
+    const sourceRecord =
+      typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : null;
+    const nestedStatus = sourceRecord?.status ?? sourceRecord?._databaseStatus;
+    if (nestedStatus === "failed" || nestedStatus === "blocked" || nestedStatus === "fallback") {
+      throw new Error(`Awareness source returned ${nestedStatus}.`);
+    }
     const isEmptyArray = Array.isArray(data) && data.length === 0;
+    const total = sourceRecord?._total;
+    const isEmptyStats =
+      total !== undefined && Number.isFinite(Number(total)) && Number(total) === 0;
 
     return {
       data,
-      status: isEmptyArray ? "empty" : "connected",
+      status: isEmptyArray || isEmptyStats ? "empty" : "connected",
     };
   } catch (error: any) {
     return {
@@ -119,7 +132,14 @@ function detectRecommendedAction(input: {
 export async function buildAwarenessState() {
   const memoryStatsResult = await safeRead(
     () => getMemoryCategoryStats(),
-    { _total: 0, _source: "", _timestamp: "" }
+    {
+      _total: 0,
+      _source: "",
+      _timestamp: "",
+      categories: [] as Array<{ category: string; count: number }>,
+      _databaseStatus: "failed" as const,
+      _databaseError: null,
+    }
   );
 
   const autonomousGoalsResult = await safeRead(
@@ -147,7 +167,11 @@ export async function buildAwarenessState() {
     []
   );
 
-  const memoryStats: any[] = Array.isArray(memoryStatsResult.data) ? memoryStatsResult.data : [];
+  const memoryStats: any[] = Array.isArray(memoryStatsResult.data)
+    ? memoryStatsResult.data
+    : Array.isArray((memoryStatsResult.data as any)?.categories)
+      ? (memoryStatsResult.data as any).categories
+      : [];
   const autonomousGoals: any[] = autonomousGoalsResult.data;
   const autonomousPriorities: any[] =
     autonomousPrioritiesResult.data;
@@ -180,7 +204,13 @@ export async function buildAwarenessState() {
   ).length;
 
   const weakSkills = skillLevels
-    .filter((skill: any) => (skill.level || 1) <= 1)
+    .filter((skill: any) =>
+      skill?.level !== undefined &&
+      skill?.level !== null &&
+      String(skill.level).trim() !== "" &&
+      Number.isFinite(Number(skill.level)) &&
+      Number(skill.level) <= 1
+    )
     .map((skill: any) => skill.skill)
     .filter(Boolean);
 
@@ -230,7 +260,9 @@ export async function buildAwarenessState() {
     personalityTraits,
   });
 
-  const verified = sourceFailures === 0;
+  const verified =
+    sourceFailures === 0 &&
+    Object.values(sourceStatuses).every((status) => status === "connected");
 
   return {
     awareness: {
@@ -243,12 +275,7 @@ export async function buildAwarenessState() {
         : Math.max(0, awarenessScore - sourceFailures * 10),
 
       systemState: {
-        runtime:
-          sourceFailures === 0
-            ? "active"
-            : sourceFailures < 3
-              ? "degraded"
-              : "needs_attention",
+        runtime: "not_checked",
 
         memory:
           memoryStatsResult.status === "connected"
@@ -272,11 +299,13 @@ export async function buildAwarenessState() {
               : "failed",
 
         evolution:
-          pendingUpgrades.length > 0
-            ? "suggestions_pending"
-            : evolutionSuggestionsResult.status === "failed"
-              ? "failed"
-              : "stable",
+          evolutionSuggestionsResult.status === "failed"
+            ? "failed"
+            : evolutionSuggestionsResult.status === "empty"
+              ? "empty"
+              : pendingUpgrades.length > 0
+                ? "suggestions_pending"
+                : "stable",
 
         personality:
           personalityTraitsResult.status === "connected"
@@ -285,8 +314,7 @@ export async function buildAwarenessState() {
               ? "empty"
               : "failed",
 
-        protection:
-          sourceFailures === 0 ? "enabled" : "degraded",
+        protection: "not_checked",
       },
 
       sourceStatuses,

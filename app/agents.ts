@@ -66,8 +66,15 @@ function normalize(text: string) {
   return text.toLowerCase().trim();
 }
 
+function matchesCapability(task: string, capability: string) {
+  const normalizedTask = normalize(task);
+  const normalizedCapability = normalize(capability);
+  return normalizedTask.includes(normalizedCapability) ||
+    normalizedTask.includes(normalizedCapability.replace(/_/g, " "));
+}
+
 function calculateSuccessRate(memory: AgentMemory) {
-  if (memory.runs === 0) return 1;
+  if (memory.runs === 0) return 0;
   return memory.successes / memory.runs;
 }
 
@@ -103,14 +110,14 @@ function createAgent(
     priority,
     status: "idle",
     capabilities,
-    confidence: 1,
+    confidence: 0.5,
     memory,
 
     canHandle(task: string) {
       const lowerTask = normalize(task);
 
       return this.capabilities.some((capability) =>
-        lowerTask.includes(normalize(capability).replace("_", " "))
+        matchesCapability(lowerTask, capability)
       );
     },
 
@@ -123,6 +130,206 @@ function createAgent(
 
       try {
         // Explicit commands only: regular autonomy workflow text is never code execution.
+        if (this.id === "planner") {
+          const { buildTaskPlanPreview } = await import("./task-planner");
+          const plan = buildTaskPlanPreview(task);
+          const blocked = plan.risk === "critical";
+
+          const result =
+            `Planner generated a real task plan preview: ${JSON.stringify(plan)}. ` +
+            "No workflow steps executed. No files changed.";
+
+          this.status = blocked ? "failed" : "completed";
+
+          if (blocked) {
+            this.memory.failures += 1;
+            this.memory.lastError = "Critical task blocked by Planner.";
+          } else {
+            this.memory.successes += 1;
+            this.memory.lastError = undefined;
+          }
+
+          this.memory.lastResult = result;
+          this.confidence = calculateConfidence(this.memory);
+
+          return {
+            agentId: this.id,
+            status: this.status,
+            task,
+            result,
+            confidence: this.confidence,
+            fileChanged: false,
+            requiresApproval: plan.requiresApproval,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (this.id === "memory") {
+          const { searchMemories, getRecentMemories } =
+            await import("./memory-store");
+
+          const prefix = "MEMORY_SEARCH:";
+          const explicitSearch = task.startsWith(prefix);
+          const query = explicitSearch
+            ? task.slice(prefix.length).trim()
+            : "";
+
+          if (explicitSearch && !query) {
+            throw new Error("Memory search requires a query.");
+          }
+
+          const memories = explicitSearch
+            ? await searchMemories(query, 5)
+            : await getRecentMemories(5);
+
+          const records = memories.map((memory) => ({
+            category: memory.category,
+            content: memory.user_message.slice(0, 300),
+            createdAt: memory.created_at,
+          }));
+
+          const result = JSON.stringify({
+            operation: explicitSearch ? "memory_search" : "recent_memories",
+            query,
+            records,
+            count: records.length,
+            source: "memory-store",
+            supabaseConnectionVerified: false,
+            fileChanged: false,
+            note:
+              "Read-only memory retrieval. Database availability is not verified by this operation.",
+          });
+
+          this.status = "completed";
+          this.memory.successes += 1;
+          this.memory.lastResult = result;
+          this.memory.lastError = undefined;
+          this.confidence = calculateConfidence(this.memory);
+
+          return {
+            agentId: this.id,
+            status: this.status,
+            task,
+            result,
+            confidence: this.confidence,
+            fileChanged: false,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (this.id === "researcher" && task.startsWith("RESEARCH_QUERY:")) {
+          const query = task.slice("RESEARCH_QUERY:".length).trim();
+
+          if (!query || query.length > 300) {
+            throw new Error("Researcher requires a valid search query.");
+          }
+
+          const { searchAndLearn } = await import("./internet-learning");
+
+          const research = await searchAndLearn(query);
+          const searchSucceeded = research.status === "connected";
+
+          const result = JSON.stringify({
+            operation: "internet_research",
+            query,
+            searchStatus: research.status,
+            searchResult: JSON.stringify(research.result || {}).slice(0, 5000),
+            source: "internet-learning",
+            knowledgeSaved: false,
+            fileChanged: false,
+            note:
+              "Internet search performed. Results require source verification before factual claims.",
+          });
+
+          this.status = searchSucceeded ? "completed" : "failed";
+
+          if (searchSucceeded) {
+            this.memory.successes += 1;
+            this.memory.lastError = undefined;
+          } else {
+            this.memory.failures += 1;
+            this.memory.lastError = result;
+          }
+
+          this.memory.lastResult = result;
+          this.confidence = calculateConfidence(this.memory);
+
+          return {
+            agentId: this.id,
+            status: this.status,
+            task,
+            result,
+            confidence: this.confidence,
+            fileChanged: false,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        if (
+          this.id === "orchestrator" &&
+          task.startsWith("ORCHESTRATOR_FINALIZE_JSON:")
+        ) {
+          const raw = task.slice("ORCHESTRATOR_FINALIZE_JSON:".length);
+          const parsed: unknown = JSON.parse(raw);
+
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Invalid orchestration request.");
+          }
+
+          const request = parsed as Record<string, unknown>;
+
+          if (
+            typeof request.workflowId !== "string" ||
+            !request.workflowId.trim() ||
+            !Array.isArray(request.steps) ||
+            request.steps.length === 0 ||
+            request.steps.length > 20
+          ) {
+            throw new Error("Invalid workflow summary.");
+          }
+
+          const valid = request.steps.every((item: unknown) => {
+            if (!item || typeof item !== "object" || Array.isArray(item)) {
+              return false;
+            }
+
+            const step = item as Record<string, unknown>;
+
+            return (
+              typeof step.agentId === "string" &&
+              step.agentId !== "orchestrator" &&
+              step.status === "completed"
+            );
+          });
+
+          if (!valid) {
+            throw new Error(
+              "Cannot finalize workflow with incomplete agent steps."
+            );
+          }
+
+          const result =
+            `Orchestrator finalized ${request.steps.length} reported completed ` +
+            `agent steps for workflow ${request.workflowId}. ` +
+            "No additional actions executed.";
+
+          this.status = "completed";
+          this.memory.successes += 1;
+          this.memory.lastResult = result;
+          this.memory.lastError = undefined;
+          this.confidence = calculateConfidence(this.memory);
+
+          return {
+            agentId: this.id,
+            status: this.status,
+            task,
+            result,
+            confidence: this.confidence,
+            fileChanged: false,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
         if (this.id === "coder" && task.startsWith("CODER_PROPOSAL_JSON:")) {
           const raw = task.slice("CODER_PROPOSAL_JSON:".length);
           const request: unknown = JSON.parse(raw);
@@ -178,7 +385,7 @@ function createAgent(
         }
 
         const matchedCapabilities = this.capabilities.filter((capability) =>
-          normalize(task).includes(normalize(capability).replace("_", " "))
+          matchesCapability(task, capability)
         );
 
         const capabilityText =
@@ -278,7 +485,7 @@ function createAgent(
         capabilities: this.capabilities,
         confidence: this.confidence,
         successRate: calculateSuccessRate(this.memory),
-        memory: this.memory,
+        memory: { ...this.memory, learnedPatterns: [...this.memory.learnedPatterns] },
       };
     },
   };
@@ -390,10 +597,10 @@ export function getAgentState() {
 }
 
 export function findBestAgentsForTask(task: string, limit = 3) {
-  return getAgentList()
+  const ranked = getAgentList()
     .map((agent) => {
       const capabilityMatches = agent.capabilities.filter((capability) =>
-        normalize(task).includes(normalize(capability).replace("_", " "))
+        matchesCapability(task, capability)
       ).length;
 
       const statusScore =
@@ -415,9 +622,12 @@ export function findBestAgentsForTask(task: string, limit = 3) {
         capabilityMatches,
       };
     })
+    .filter((item) => item.capabilityMatches > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((item) => item.agent);
+
+  return ranked.length > 0 ? ranked : [Agents.planner];
 }
 
 export function resetAgentRuntimeState() {

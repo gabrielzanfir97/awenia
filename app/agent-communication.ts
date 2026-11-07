@@ -495,13 +495,103 @@ export const agentCommunication = runAgentCommunication;
 export default runAgentCommunication;
 
 export async function communicateBetweenAgents(
-  from: string, to: string, content: string, metadata: any = {}, p0: string, p1: { distributionId: string; taskId: string; }) {
+  from: string, to: string, content: string, priorityOrMetadata: number | string | Record<string, unknown> = {}, messageType = "info", payload: Record<string, unknown> = {}) {
+  const metadata =
+    priorityOrMetadata && typeof priorityOrMetadata === "object"
+      ? priorityOrMetadata
+      : { ...payload, agentPriority: priorityOrMetadata, messageType };
   return sendAgentMessage(from, to, content, metadata);
 }
 
 export async function createAgentBroadcast(
-  from: string, p0: string, p1: number, p2: string, p3: { distributionId: string; task: string; selectedAgents: string[]; }, agents: string[], content: string, metadata: any = {}) {
+  from: string,
+  contentOrLegacy: string,
+  priority: number,
+  messageType: string,
+  payload: Record<string, unknown> = {},
+  legacyAgents?: string[],
+  legacyContent?: string,
+  legacyMetadata: Record<string, unknown> = {}
+) {
+  const agents =
+    Array.isArray(legacyAgents) && legacyAgents.length > 0
+      ? legacyAgents
+      : Array.isArray(payload.selectedAgents)
+        ? payload.selectedAgents.filter(
+            (agent): agent is string => typeof agent === "string"
+          )
+        : [];
+
+  if (!agents.length) {
+    return {
+      status: "failed",
+      from,
+      agents: [],
+      results: [],
+      count: 0,
+      error: "No recipients supplied for agent broadcast",
+      timestamp: now(),
+    };
+  }
+
+  const content = legacyContent ?? contentOrLegacy;
+
+  const metadata = {
+    ...(legacyContent === undefined ? payload : legacyMetadata),
+    agentPriority: priority,
+    messageType,
+  };
   return broadcastAgentMessage(from, agents, content, metadata);
+}
+
+export function getWorkflowAgentMessages(workflowId: string, limit = 50) {
+  const id = workflowId.trim();
+
+  if (!id) {
+    return {
+      status: "failed",
+      workflowId: id,
+      messages: [],
+      count: 0,
+      error: "Workflow ID is required.",
+      timestamp: now(),
+    };
+  }
+
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+
+  const messages = runtimeMessages
+    .filter((message) => {
+      const metadata = message.metadata;
+
+      if (!metadata || typeof metadata !== "object") {
+        return false;
+      }
+
+      return (
+        metadata.workflowId === id ||
+        metadata.meta?.workflowId === id
+      );
+    })
+    .slice(0, safeLimit)
+    .map((message) => ({
+      id: message.id,
+      from: message.from,
+      to: message.to,
+      type: message.type,
+      priority: message.priority,
+      status: message.status,
+      content: message.content.slice(0, 1000),
+      createdAt: message.createdAt,
+    }));
+
+  return {
+    status: "received",
+    workflowId: id,
+    messages,
+    count: messages.length,
+    timestamp: now(),
+  };
 }
 
 export function getAgentCommunicationStats() {

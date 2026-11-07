@@ -312,6 +312,14 @@ async function buildAweniaMessages(input: {
     mode: "chat",
     skill: activeSkill,
     extraContext: [
+      "AWENIA CORE STATE:",
+      await import("@/app/awenia-core")
+        .then(({ buildAweniaCorePrompt }) =>
+          buildAweniaCorePrompt(input.message).slice(0, 2200)
+        )
+        .catch((error: unknown) =>
+          `Core state unavailable: ${error instanceof Error ? error.message : String(error)}`
+        ),
       "Reguli importante:",
       "- Răspunde în română pentru Gabi.",
       "- Nu inventa status de build, internet, Supabase sau fișiere.",
@@ -332,6 +340,29 @@ async function buildAweniaMessages(input: {
         summary: input.cognitionRuntime?.summary,
         recommendation: input.cognitionRuntime?.recommendation,
       }).slice(0, 3000),
+      "Cognition core results:",
+      safeStringify(
+        (input.cognitionRuntime?.steps || [])
+          .filter((step: any) =>
+            [
+              "awareness",
+              "long_term_memory",
+              "goals",
+              "decision",
+              "agent_workflow",
+              "reasoning_network",
+            ].includes(step?.name)
+          )
+          .map((step: any) => ({
+            name: step.name,
+            status: step.status,
+            result:
+              step.status === "completed"
+                ? safeStringify(step.result).slice(0, 500)
+                : null,
+            error: step.error || null,
+          }))
+      ).slice(0, 3500),
     ].join("\n"),
   } as any);
 
@@ -527,6 +558,11 @@ export async function POST(request: NextRequest) {
       timeoutMs: 180000,
       temperature: 0.2,
       numCtx: 8192,
+      provider:
+        process.env.NODE_ENV !== "production" &&
+        message.startsWith("TEST_AVC:")
+          ? "awenia_virtual"
+          : "local",
     } as any);
 
     console.timeEnd("AI_CALL");
