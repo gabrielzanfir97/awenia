@@ -169,6 +169,59 @@ export async function runInternetLearning(
 
     const sources = results.flatMap((item: any) => item.result?.sources || []);
 
+    // Persist fetched source summaries separately from reflections and learning tasks.
+    // "learned" here means source material was fetched, not independently fact-checked.
+    let knowledgePersistence: any = { status: "not_saved", persisted: false };
+    const usableSources = sources.filter((source: any) =>
+      source?.status === "success" &&
+      typeof source.url === "string" &&
+      /^https:\/\//i.test(source.url)
+    );
+
+    if (status === "learned" && usableSources.length > 0 &&
+        combinedKnowledge.trim().length > 25) {
+      try {
+        const { getRecentMemories, saveMemory } = await import("./memory-store");
+        const existing = await getRecentMemories(400);
+        const duplicate = existing.some((item: any) =>
+          item.category === "learning" &&
+          item.metadata?.source === "internet" &&
+          String(item.metadata?.topic || "").toLowerCase() === topic.trim().toLowerCase()
+        );
+
+        if (duplicate) {
+          knowledgePersistence = { status: "duplicate", persisted: false };
+        } else {
+          const saved = await saveMemory({
+            user_message: `Internet topic: ${topic}\n${combinedKnowledge.slice(0, 6000)}`,
+            awenia_reply: "Fetched source summaries; independent factual verification not performed.",
+            category: "learning",
+            importance: 7,
+            metadata: {
+              source: "internet",
+              topic,
+              evidence: "fetched_wikipedia_summaries",
+              independentlyVerified: false,
+              verifiedFetch: true,
+              confidence,
+              sourceUrls: usableSources.slice(0, 5).map((item: any) => item.url),
+              learnedAt: now(),
+            },
+          });
+          knowledgePersistence = {
+            status: saved.status,
+            persisted: saved.supabase?.saved === true,
+            error: saved.supabase?.error || null,
+          };
+        }
+      } catch (error: any) {
+        knowledgePersistence = {
+          status: "failed", persisted: false,
+          error: error?.message || "Knowledge persistence failed",
+        };
+      }
+    }
+
     await createAutonomousReflection(
       `Internet learning completed: ${topic}`,
       `Status: ${status}. Learned topics: ${learnedResults.length}. Limited: ${limitedResults.length}.`,
@@ -209,6 +262,7 @@ export async function runInternetLearning(
         sources,
         confidence,
         suggestionSaved,
+        knowledgePersistence,
         recommendation:
           status === "learned"
             ? "Use learned knowledge as verified internet summary"

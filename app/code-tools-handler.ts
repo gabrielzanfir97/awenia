@@ -1157,11 +1157,103 @@ export async function handleGeneratePatch(message: string) {
 
       const proposal = coderResult.proposal;
 
-      return response("GENERATE_PATCH", "completed", {
-        status: "completed",
+      // Validate the AI proposal against the latest real source.
+      const latestContent = await readProjectFile(filePath);
+
+      const validation = validateProjectFilePath(
+        filePath,
+        "patch"
+      );
+
+      const proposedContent = latestContent.replace(
+        proposal.searchText,
+        () => proposal.replacementText
+      );
+
+      const proposalValid =
+        validation.allowed &&
+        safety.canWriteWithApproval === true &&
+        proposal.filePath === filePath &&
+        proposal.status === "ready_for_review" &&
+        proposal.requiresApproval === true &&
+        proposal.fileChanged === false &&
+        Boolean(proposal.searchText) &&
+        Boolean(proposal.replacementText) &&
+        proposal.searchText !== proposal.replacementText &&
+        hashContent(latestContent) === proposal.originalHash &&
+        countOccurrences(latestContent, proposal.searchText) === 1 &&
+        proposedContent !== latestContent &&
+        hashContent(proposedContent) === proposal.proposedHash;
+
+      if (!proposalValid) {
+        return response("GENERATE_PATCH", "needs_attention", {
+          status: "needs_attention",
+          reason: "AI proposal failed source or safety validation.",
+          noFileChanged: true,
+        });
+      }
+
+      const patch =
+        "SEARCH:\n" +
+        proposal.searchText +
+        "\n\nREPLACE:\n" +
+        proposal.replacementText;
+
+      const risk = analyzePendingActionRisk({
+        action_type: "PATCH_FILE",
+        file_path: filePath,
+        patch,
+        reason: "AI-generated coding proposal",
+        source: "code-tools-handler",
+        requires_approval: true,
+      });
+
+      if (risk.blocked || risk.valid === false) {
+        return response("GENERATE_PATCH", "blocked", {
+          status: "blocked",
+          reason: "AI-generated patch blocked by risk validation.",
+          risk,
+          noFileChanged: true,
+        });
+      }
+
+      const pendingAction = await savePendingAction({
+        action_type: "PATCH_FILE",
+        file_path: filePath,
+        patch,
+        reason: "AI-generated coding proposal",
+        source: "code-tools-handler",
+        requires_approval: true,
+        metadata: {
+          risk,
+          searchText: proposal.searchText,
+          replacementText: proposal.replacementText,
+          createdByTool: "GENERATE_PATCH",
+          expectedFileExists: true,
+          expectedFileHash: proposal.originalHash,
+          proposedHash: proposal.proposedHash,
+        },
+      });
+
+      const saved = checkPendingActionSaved(pendingAction);
+
+      if (!saved.saved) {
+        return response("GENERATE_PATCH", "failed", {
+          status: "failed",
+          reason: "AI proposal could not be queued for approval.",
+          noFileChanged: true,
+        });
+      }
+
+      return response("GENERATE_PATCH", "pending_approval", {
+        status: "pending_approval",
+        message: "AI coding proposal queued. Gabi approval required.",
         proposal,
+        risk,
+        pendingAction,
         noFileChanged: true,
-        message: "AI proposal only. Review before queuing PATCH_FILE.",
+        executeInstruction:
+          `After Gabi approval, use EXECUTE_PATCH_FILE: ${saved.actionId}`,
       });
     }
 

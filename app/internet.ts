@@ -339,6 +339,69 @@ export async function runInternetSearch(query: string) {
   return searchInternet(query, 5);
 }
 
+/** Google Search results via Serper (independent third-party API; no Gemini). */
+export async function searchGoogle(query: string, limit = 5) {
+  const cleanQuery = normalizeQuery(String(query || "")).slice(0, 300);
+  const apiKey = process.env.SERPER_API_KEY?.trim();
+  const timestamp = now();
+  const provider = "serper";
+
+  if (!cleanQuery) {
+    return { status: "failed", verified: false, provider, query: cleanQuery,
+      sources: [] as InternetSource[], error: "Missing query", timestamp };
+  }
+
+  if (!apiKey) {
+    return { status: "not_configured", verified: false, provider, query: cleanQuery,
+      sources: [] as InternetSource[], error: "SERPER_API_KEY is not configured", timestamp };
+  }
+
+  try {
+    const response = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": apiKey,
+      },
+      body: JSON.stringify({ q: cleanQuery, num: Math.max(1, Math.min(10, limit)), gl: "gb", hl: "en" }),
+      signal: AbortSignal.timeout(10000),
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      return { status: "failed", verified: false, provider, query: cleanQuery,
+        sources: [] as InternetSource[], error: `Serper HTTP ${response.status}`, timestamp: now() };
+    }
+
+    const payload: unknown = await response.json();
+    const organic = (payload && typeof payload === "object" &&
+      "organic" in payload && Array.isArray(payload.organic)) ? payload.organic : [];
+
+    const sources: InternetSource[] = organic.slice(0, Math.max(1, Math.min(10, limit)))
+      .filter((item: any) => typeof item?.link === "string" && /^https?:\/\//i.test(item.link))
+      .map((item: any) => ({
+        name: "Google results (via Serper)",
+        url: item.link,
+        title: String(item.title || "").slice(0, 250),
+        summary: String(item.snippet || "").slice(0, 750),
+        status: "success" as InternetSourceStatus,
+      }));
+
+    return {
+      status: sources.length ? "connected" : "limited",
+      verified: sources.length > 0,
+      provider,
+      query: cleanQuery,
+      sources,
+      error: sources.length ? null : "Google search returned no organic results",
+      timestamp: now(),
+    };
+  } catch (error: any) {
+    return { status: "failed", verified: false, provider, query: cleanQuery,
+      sources: [] as InternetSource[], error: error?.message || "Google search failed", timestamp: now() };
+  }
+}
+
 export async function checkInternetStatus() {
   return checkInternetConnection();
 }

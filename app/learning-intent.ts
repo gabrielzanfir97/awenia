@@ -295,6 +295,120 @@ export function shouldStudyTopic(message: string) {
   return shouldCreateLearningTask(message);
 }
 
+// Capture only explicit user-taught lessons, not every chat message or model answer.
+// This is persistent retrieval memory, NOT training the model weights.
+export async function learnFromChatMessage(message: string) {
+  const clean = String(message || "").trim();
+  const teachPattern = /^(?:awenia[,\s:]+)?(?:ține minte|tine minte|reține|retine|notează|noteaza|regula (?:este|e|mea este)|corect (?:este|e)|soluția (?:a fost|este)|solutia (?:a fost|este)|am rezolvat (?:prin|cu)|de acum (?:înainte|inainte)|pe viitor|prefer (?:să|sa))(?=\s|[,:.!?]|$)/i;
+
+  if (clean.length < 15 || clean.length > 1600 || !teachPattern.test(clean)) {
+    return { status: "not_detected", learned: false, persisted: false };
+  }
+
+  // Avoid automatic storage of apparent credentials, direct contacts and secrets.
+  const sensitive = /(?:\b(?:api[_-]?key|token|password|parola|secret|service_role|private_key)\b\s*[:=]\s*\S+|sk-[a-z0-9_-]{12,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|[^\s@]+@[^\s@]+\.[^\s@]+|\b(?:\+?\d[ -]?){11,16}\b)/i;
+  if (sensitive.test(clean)) {
+    return { status: "skipped_sensitive", learned: false, persisted: false };
+  }
+
+  try {
+    const { getRecentMemories, saveMemory } = await import("./memory-store");
+    const normalizeLesson = (value: string) =>
+      value.toLocaleLowerCase("ro-RO").replace(/\s+/g, " ").trim();
+    const previous = await getRecentMemories(400);
+    const alreadySaved = previous.some((item: any) =>
+      item.category === "learning" &&
+      item.metadata?.source === "chat" &&
+      normalizeLesson(String(item.user_message || "")) === normalizeLesson(clean)
+    );
+
+    if (alreadySaved) {
+      return { status: "duplicate", learned: false, persisted: false };
+    }
+
+    const saved = await saveMemory({
+      user_message: clean,
+      awenia_reply: "Explicit user-taught lesson; treat as user statement, not independently verified fact.",
+      category: "learning",
+      importance: 8,
+      metadata: {
+        source: "chat",
+        evidence: "explicit_user_statement",
+        independentlyVerified: false,
+        learnedAt: new Date().toISOString(),
+      },
+    });
+
+    const persisted = saved.supabase?.saved === true;
+    return {
+      status: persisted ? "saved" : "partial",
+      learned: true,
+      persisted,
+      error: saved.supabase?.error || null,
+    };
+  } catch (error: any) {
+    return {
+      status: "failed", learned: false, persisted: false,
+      error: error?.message || "Chat learning failed",
+    };
+  }
+}
+
+// Bounded, keyword-based retrieval of explicit chat lessons and fetched knowledge.
+// Semantic embeddings and richer conflict resolution can be added in phase two.
+export async function recallRelevantLearnedKnowledge(query: string, limit = 4) {
+  const normalizeWords = (value: string): string[] =>
+    (value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .match(/[a-z0-9]{4,}/g) || []);
+  const ignored = new Set([
+    "awenia", "despre", "pentru", "care", "cand", "cum", "este", "sunt",
+    "vreau", "spune", "poti", "poate", "acest", "aceasta", "acum",
+    "invata", "invatat", "memorie", "remember", "from", "that", "what",
+    "with", "your", "have", "please", "knowledge", "learning",
+  ]);
+  const queryWords = [...new Set(normalizeWords(String(query || "")))]
+    .filter((word) => !ignored.has(word)).slice(0, 12);
+  if (!queryWords.length) return { status: "no_query_terms", matches: [] };
+
+  try {
+    const { getRecentMemories } = await import("./memory-store");
+    const memories = await getRecentMemories(400);
+    const ranked = memories
+      .filter((item: any) => item.category === "learning" &&
+        ["chat", "internet"].includes(String(item.metadata?.source || "")))
+      .map((item: any) => {
+        const text = String(item.user_message || "");
+        const terms = new Set(normalizeWords(
+          text.slice(0, 5000) + " " + String(item.metadata?.topic || "")
+        ));
+        const score = queryWords.reduce((sum, word) =>
+          sum + ([...terms].some((term) =>
+            term === word || (word.length >= 5 && term.startsWith(word.slice(0, 5)))
+          ) ? 1 : 0), 0);
+        return { item, score };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(1, Math.min(6, limit)))
+      .map(({ item, score }) => ({
+        text: String(item.user_message || "").slice(0, 1100),
+        source: String(item.metadata?.source || "unknown"),
+        independentlyVerified: item.metadata?.independentlyVerified === true,
+        sourceUrls: Array.isArray(item.metadata?.sourceUrls)
+          ? item.metadata.sourceUrls.slice(0, 3) : [],
+        createdAt: item.created_at,
+        score,
+      }));
+
+    return { status: ranked.length ? "found" : "empty", matches: ranked };
+  } catch (error: any) {
+    return {
+      status: "failed", matches: [],
+      error: error?.message || "Knowledge retrieval failed",
+    };
+  }
+}
+
 export function getLearningPriority(message: string) {
   return detectPriority(message);
 }
