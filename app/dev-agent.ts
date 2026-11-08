@@ -62,7 +62,7 @@ export type DevAgentPatchResult = {
   timestamp: string;
 };
 
-const PROJECT_ROOT = path.resolve(process.cwd());
+const PROJECT_ROOT = path.resolve(/* turbopackIgnore: true */ process.cwd());
 const BACKUP_ROOT = path.resolve(
   process.env.USERPROFILE || path.dirname(PROJECT_ROOT),
   "Awenia-Backups"

@@ -552,6 +552,41 @@ export async function POST(request: NextRequest) {
       cognitionRuntime,
     });
 
+    // Recover recent chat history for the current session.
+    // Prefer Supabase messages to avoid duplicates.
+    try {
+      const { getChatHistory } = await import("@/app/chat-history");
+
+      const history = await getChatHistory(sessionId, 8);
+
+      const sourceMessages =
+        history.storedMessages.length > 0
+          ? history.storedMessages
+          : history.runtimeMessages;
+
+      const previousMessages = sourceMessages
+        .filter(
+          (item) =>
+            (item.role === "user" || item.role === "assistant") &&
+            typeof item.content === "string" &&
+            item.content.trim().length > 0
+        )
+        .slice(0, 8)
+        .reverse()
+        .map((item) => ({
+          role: item.role as "user" | "assistant",
+          content: item.content.slice(0, 1200),
+        }));
+
+      aiMessages.splice(
+        aiMessages.length - 1,
+        0,
+        ...previousMessages
+      );
+    } catch (error) {
+      console.warn("Chat history recovery unavailable:", error);
+    }
+
     console.time("AI_CALL");
 
     const aiResponse = await callAIWithFallbackOptimized(aiMessages as any, {

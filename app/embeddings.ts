@@ -366,7 +366,147 @@ export async function searchEmbeddings(
     threshold?: number;
   }
 ) {
-  return searchRuntimeEmbeddings(query, options);
+  const runtimeResult = searchRuntimeEmbeddings(query, options);
+
+  if (!isSupabaseConfigured()) {
+    return {
+      ...runtimeResult,
+      databaseStatus: "not_configured",
+      databaseError: "Supabase is not configured",
+    };
+  }
+
+  try {
+    let request: any = supabase
+      .from("project_code_embeddings")
+      .select(
+        "id,text,embedding,source,type,reference,metadata,created_at"
+      )
+      .order("created_at", { ascending: false })
+      .limit(500);
+
+    if (options?.source) {
+      request = request.eq("source", options.source);
+    }
+
+    if (options?.type) {
+      request = request.eq("type", options.type);
+    }
+
+    const { data, error } = await request;
+
+    if (error) {
+      return {
+        ...runtimeResult,
+        databaseStatus: "failed",
+        databaseError: error.message,
+      };
+    }
+
+    const latest = new Map<string, EmbeddingRecord>();
+    let invalidVectors = 0;
+
+    const addRecord = (record: EmbeddingRecord) => {
+      const key = [
+        record.source,
+        record.type,
+        record.reference || record.id,
+      ].join("::");
+
+      const existing = latest.get(key);
+
+      if (
+        !existing ||
+        Date.parse(record.createdAt || "1970-01-01") >=
+          Date.parse(existing.createdAt || "1970-01-01")
+      ) {
+        latest.set(key, record);
+      }
+    };
+
+    for (const row of data || []) {
+      const vector = Array.isArray(row.embedding)
+        ? row.embedding.map(Number)
+        : [];
+
+      if (
+        vector.length !== EMBEDDING_DIMENSIONS ||
+        !vector.every(Number.isFinite)
+      ) {
+        invalidVectors++;
+        continue;
+      }
+
+      addRecord({
+        id: String(row.id),
+        text: String(row.text || ""),
+        embedding: vector,
+        source: (row.source || "supabase") as EmbeddingSource,
+        type: String(row.type || "text"),
+        reference: row.reference || undefined,
+        metadata: row.metadata || {},
+        createdAt: row.created_at || "",
+      });
+    }
+
+    for (const record of runtimeEmbeddings) {
+      if (options?.source && record.source !== options.source) {
+        continue;
+      }
+
+      if (options?.type && record.type !== options.type) {
+        continue;
+      }
+
+      addRecord(record);
+    }
+
+    const queryVector = generateLocalEmbedding(query);
+    const threshold = options?.threshold ?? 0;
+    const limit = Math.max(
+      0,
+      Math.floor(options?.limit ?? 10)
+    );
+
+    const results: EmbeddingSearchResult[] = Array.from(
+      latest.values()
+    )
+      .map((record) => {
+        const similarity = cosineSimilarity(
+          queryVector,
+          record.embedding
+        );
+
+        return {
+          record,
+          similarity,
+          score: Math.round(similarity * 1000) / 10,
+        };
+      })
+      .filter((item) => item.similarity >= threshold)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+
+    return {
+      status: "searched" as EmbeddingStatus,
+      query,
+      results,
+      count: results.length,
+      source: "hybrid",
+      databaseStatus: "loaded",
+      databaseRecords: (data || []).length,
+      uniqueRecords: latest.size,
+      invalidVectors,
+      timestamp: now(),
+    };
+  } catch (error: any) {
+    return {
+      ...runtimeResult,
+      databaseStatus: "failed",
+      databaseError:
+        error?.message || "Failed to search stored embeddings",
+    };
+  }
 }
 
 export async function searchCodeEmbeddings(

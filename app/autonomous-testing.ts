@@ -32,6 +32,7 @@ export type AutonomousTestReport = {
     total: number;
     passed: number;
     failed: number;
+    partial: number;
     skipped: number;
     durationMs: number;
   };
@@ -57,12 +58,49 @@ async function safeTest(
   try {
     const result = await runner();
 
+    const outcome = ((): AutonomousTestStatus => {
+      switch (name) {
+        case "awareness":
+          if (result?.hasAwareness !== true) return "failed";
+          return result?.verified === true ? "passed" : "partial";
+        case "long_term_memory":
+          if (result?.hasMemory !== true || result?.status === "failed") return "failed";
+          return result?.status === "partial" || result?.memoryHealth === "unknown"
+            ? "partial" : "passed";
+        case "goal_manager":
+          return result?.hasGoals === true && result?.status !== "failed"
+            ? "passed" : "failed";
+        case "decision_engine":
+          return result?.hasDecision === true &&
+            typeof result?.decision?.action === "string"
+            ? "passed" : "failed";
+        case "agent_workflow":
+          if (result?.workflow?.status === "skipped") return "skipped";
+          return result?.workflow?.success === true &&
+            result?.workflow?.status === "completed" &&
+            Array.isArray(result?.workflow?.steps) &&
+            result.workflow.steps.length > 0 &&
+            result.workflow.steps.every((step: any) => step.status === "completed")
+            ? "passed" : "failed";
+        case "memory_store_write":
+          return result?.reflection?.status === "saved" &&
+            result?.reflection?.supabase?.saved === true
+            ? "passed" : "failed";
+        default:
+          return "failed";
+      }
+    })();
+
     return {
       name,
-      status: "passed",
-      passed: true,
+      status: outcome,
+      passed: outcome === "passed",
       durationMs: Date.now() - started,
       result,
+      ...(outcome === "failed" ? {
+        error: result?.reflection?.supabase?.error ||
+          `Test ${name} did not meet its success criteria`,
+      } : {}),
       timestamp: now(),
     };
   } catch (error: any) {
@@ -83,6 +121,7 @@ function summarizeTests(tests: AutonomousTestResult[]) {
     total: tests.length,
     passed: tests.filter((test) => test.status === "passed").length,
     failed: tests.filter((test) => test.status === "failed").length,
+    partial: tests.filter((test) => test.status === "partial").length,
     skipped: tests.filter((test) => test.status === "skipped").length,
     durationMs: tests.reduce((sum, test) => sum + test.durationMs, 0),
   };
@@ -193,11 +232,9 @@ export async function testAgentWorkflowSystem() {
     const orchestrator: any = await import("./agent-orchestrator");
 
     const workflow =
-      typeof orchestrator.coordinateAgents === "function"
-        ? await orchestrator.coordinateAgents("monitor")
-        : typeof orchestrator.executeAgentWorkflow === "function"
-          ? await orchestrator.executeAgentWorkflow("monitor")
-          : {
+      typeof orchestrator.executeAgentWorkflow === "function"
+        ? await orchestrator.executeAgentWorkflow("monitor")
+        : {
             status: "skipped",
             reason: "No agent workflow function found",
           };
@@ -239,11 +276,11 @@ export async function runAutonomousTests(): Promise<AutonomousTestReport> {
   const summary = summarizeTests(tests);
 
   const status: AutonomousTestStatus =
-    summary.failed === 0
+    summary.passed === summary.total
       ? "passed"
-      : summary.passed > 0
-        ? "partial"
-        : "failed";
+      : summary.failed === summary.total
+        ? "failed"
+        : "partial";
 
   const report: AutonomousTestReport = {
     status,
@@ -262,20 +299,34 @@ export async function runAutonomousTests(): Promise<AutonomousTestReport> {
     timestamp: now(),
   };
 
-  if (status !== "passed") {
+  if (summary.failed > 0) {
     try {
-      await createEvolutionSuggestion({
-        suggestion: "Fix autonomous testing failures",
-        reason: report.recommendation,
-        priority: 8,
-        status: "pending",
-        metadata: {
-          source: "autonomous-testing",
-          failedTests: tests
-            .filter((test) => test.status === "failed")
-            .map((test) => test.name),
-        },
+      const failedTests = tests
+        .filter((test) => test.status === "failed")
+        .map((test) => test.name)
+        .sort();
+      const { getEvolutionSuggestions } = await import("./memory-store");
+      const previousSuggestions = await getEvolutionSuggestions(200);
+      const duplicate = previousSuggestions.some((item: any) => {
+        const previousFailures = item?.metadata?.failedTests;
+        return item?.status === "pending" &&
+          item?.suggestion === "Fix autonomous testing failures" &&
+          item?.metadata?.source === "autonomous-testing" &&
+          Array.isArray(previousFailures) &&
+          JSON.stringify([...previousFailures].sort()) === JSON.stringify(failedTests);
       });
+      if (!duplicate) {
+        await createEvolutionSuggestion({
+          suggestion: "Fix autonomous testing failures",
+          reason: report.recommendation,
+          priority: 8,
+          status: "pending",
+          metadata: {
+            source: "autonomous-testing",
+            failedTests,
+          },
+        });
+      }
     } catch { }
   }
 

@@ -407,6 +407,83 @@ export async function handleCheckVirtualComputer() {
   }
 }
 
+function isValidVirtualRamWriteInput(value: any): value is {
+  key: string;
+  bytes: number[];
+} {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof value.key === "string" &&
+    /^[A-Za-z0-9._-]{1,128}$/.test(value.key) &&
+    Array.isArray(value.bytes) &&
+    value.bytes.length >= 1 &&
+    value.bytes.length <= 4096 &&
+    value.bytes.every(
+      (n: unknown) =>
+        typeof n === "number" &&
+        Number.isInteger(n) &&
+        n >= 0 &&
+        n <= 255
+    )
+  );
+}
+
+export async function handleRequestVirtualRamWrite(message: string) {
+  const tool = "VIRTUAL_RAM_WRITE_REQUEST";
+
+  try {
+    const raw = message
+      .trim()
+      .slice("VIRTUAL_RAM_WRITE_REQUEST:".length)
+      .trim();
+
+    if (!raw || raw.length > 24000) {
+      throw new Error("Invalid RAM write request size");
+    }
+
+    const input = JSON.parse(raw);
+
+    if (!isValidVirtualRamWriteInput(input)) {
+      throw new Error("Invalid RAM write payload");
+    }
+
+    const { savePendingAction } = await import("./pending-actions");
+
+    const action = await savePendingAction({
+      action_type: "OTHER",
+      source: "virtual_ram_write",
+      reason: "Gabi approval required for Virtual RAM write",
+      risk: "high",
+      requires_approval: true,
+      metadata: {
+        operation: "ram.write",
+        key: input.key,
+        bytes: input.bytes,
+      },
+    });
+
+    if (
+      action?.status !== "pending" ||
+      action?.requires_approval !== true
+    ) {
+      throw new Error("RAM write approval request was not queued");
+    }
+
+    return jsonResponse(
+      createResult(tool, {
+        status: "pending_approval",
+        pendingActionId: action.id,
+        key: input.key,
+        byteCount: input.bytes.length,
+        noMemoryChanged: true,
+      })
+    );
+  } catch (error: any) {
+    return jsonResponse(createErrorResult(tool, error));
+  }
+}
+
 export async function handleRunVirtualComputer(message: string) {
   const tool = "VIRTUAL_COMPUTER_RUN";
 
@@ -622,7 +699,284 @@ export async function handleAgentWorkflow(message: string) {
   }
 }
 
+const executingVirtualRamWrites = new Set<string>();
+
+export async function handleExecuteVirtualRamWrite(message: string) {
+  const tool = "EXECUTE_VIRTUAL_RAM_WRITE";
+  const id = message.trim().slice("EXECUTE_VIRTUAL_RAM_WRITE:".length).trim();
+
+  try {
+    if (!/^[1-9][0-9]{0,17}$/.test(id)) {
+      throw new Error("Invalid pending action ID");
+    }
+
+    if (executingVirtualRamWrites.has(id)) {
+      throw new Error("RAM write action is already executing");
+    }
+
+    executingVirtualRamWrites.add(id);
+
+    try {
+      const {
+        getPendingActionById,
+        canExecutePendingAction,
+        completePendingAction,
+      } = await import("./pending-actions");
+
+      const action = await getPendingActionById(id);
+      const approval = canExecutePendingAction(action);
+
+      if (
+        !approval.allowed ||
+        action?.status !== "approved" ||
+        action?.action_type !== "OTHER" ||
+        action?.source !== "virtual_ram_write" ||
+        action?.risk !== "high" ||
+        action?.requires_approval !== true ||
+        action?.approved_by !== "Gabi" ||
+        !action?.approved_at ||
+        action?.metadata?.operation !== "ram.write"
+      ) {
+        throw new Error("RAM write requires a valid Gabi-approved action");
+      }
+
+      const payload = {
+        key: action.metadata.key,
+        bytes: action.metadata.bytes,
+      };
+
+      if (!isValidVirtualRamWriteInput(payload)) {
+        throw new Error("Approved RAM write payload is invalid");
+      }
+
+      const token = process.env.AWENIA_V4_WRITE_TOKEN;
+
+      if (!token || token.length < 32) {
+        throw new Error("Virtual RAM write token is not configured");
+      }
+
+      const response = await fetch("http://127.0.0.1:38472/dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-awenia-v4-write-token": token,
+        },
+        body: JSON.stringify({ channel: "ram.write", payload }),
+        signal: AbortSignal.timeout(10000),
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+
+      if (
+        !response.ok ||
+        data?.status !== "completed" ||
+        data?.channel !== "ram.write"
+      ) {
+        throw new Error(data?.error || "Virtual RAM write failed");
+      }
+
+      try {
+        await completePendingAction(id);
+      } catch {
+        throw new Error("RAM write succeeded, but action completion failed. Do not retry automatically.");
+      }
+
+      return jsonResponse(createResult(tool, {
+        status: "completed",
+        pendingActionId: id,
+        channel: "ram.write",
+        key: payload.key,
+        byteCount: payload.bytes.length,
+        execution: data,
+        timestamp: now(),
+      }));
+    } finally {
+      executingVirtualRamWrites.delete(id);
+    }
+  } catch (error: any) {
+    return jsonResponse(createErrorResult(tool, error));
+  }
+}
+
+function isValidVirtualSsdPutInput(value: any): value is {
+  key: string;
+  bytes: number[];
+} {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof value.key === "string" &&
+    /^[A-Za-z0-9_-]{1,80}$/.test(value.key) &&
+    Array.isArray(value.bytes) &&
+    value.bytes.length >= 1 &&
+    value.bytes.length <= 4096 &&
+    value.bytes.every(
+      (n: unknown) =>
+        typeof n === "number" &&
+        Number.isInteger(n) &&
+        n >= 0 &&
+        n <= 255
+    )
+  );
+}
+
+export async function handleRequestVirtualSsdPut(message: string) {
+  const tool = "VIRTUAL_SSD_PUT_REQUEST";
+
+  try {
+    const raw = message.trim().slice("VIRTUAL_SSD_PUT_REQUEST:".length).trim();
+    if (!raw || raw.length > 24000) {
+      throw new Error("Invalid SSD write request size");
+    }
+
+    const input = JSON.parse(raw);
+    if (!isValidVirtualSsdPutInput(input)) {
+      throw new Error("Invalid SSD key or bytes");
+    }
+
+    const { savePendingAction } = await import("./pending-actions");
+    const action = await savePendingAction({
+      action_type: "OTHER",
+      source: "virtual_ssd_put",
+      reason: "Gabi approval required for Virtual SSD write",
+      risk: "high",
+      requires_approval: true,
+      metadata: {
+        operation: "ssd.put",
+        key: input.key,
+        bytes: input.bytes,
+      },
+    });
+
+    if (action?.status !== "pending" || action?.requires_approval !== true) {
+      throw new Error("SSD write approval request was not queued");
+    }
+
+    return jsonResponse(createResult(tool, {
+      status: "pending_approval",
+      pendingActionId: action.id,
+      key: input.key,
+      byteCount: input.bytes.length,
+      noSsdChanged: true,
+    }));
+  } catch (error: any) {
+    return jsonResponse(createErrorResult(tool, error));
+  }
+}
+
+const executingVirtualSsdPuts = new Set<string>();
+
+export async function handleExecuteVirtualSsdPut(message: string) {
+  const tool = "EXECUTE_VIRTUAL_SSD_PUT";
+  const id = message.trim().slice("EXECUTE_VIRTUAL_SSD_PUT:".length).trim();
+
+  try {
+    if (!/^[1-9][0-9]{0,17}$/.test(id)) {
+      throw new Error("Invalid pending action ID");
+    }
+    if (executingVirtualSsdPuts.has(id)) {
+      throw new Error("SSD write action is already executing");
+    }
+
+    executingVirtualSsdPuts.add(id);
+    try {
+      const {
+        getPendingActionById,
+        canExecutePendingAction,
+        completePendingAction,
+      } = await import("./pending-actions");
+
+      const action = await getPendingActionById(id);
+      const approval = canExecutePendingAction(action);
+      if (
+        !approval.allowed ||
+        action?.status !== "approved" ||
+        action?.action_type !== "OTHER" ||
+        action?.source !== "virtual_ssd_put" ||
+        action?.risk !== "high" ||
+        action?.requires_approval !== true ||
+        action?.approved_by !== "Gabi" ||
+        !action?.approved_at ||
+        action?.metadata?.operation !== "ssd.put"
+      ) {
+        throw new Error("SSD write requires a valid Gabi-approved action");
+      }
+
+      const payload = {
+        key: action.metadata.key,
+        bytes: action.metadata.bytes,
+      };
+      if (!isValidVirtualSsdPutInput(payload)) {
+        throw new Error("Approved SSD payload is invalid");
+      }
+
+      const token = process.env.AWENIA_V4_WRITE_TOKEN;
+      if (!token || token.length < 32) {
+        throw new Error("Virtual SSD write token is not configured");
+      }
+
+      const response = await fetch("http://127.0.0.1:38472/dispatch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-awenia-v4-write-token": token,
+        },
+        body: JSON.stringify({ channel: "ssd.put", payload }),
+        signal: AbortSignal.timeout(10000),
+        cache: "no-store",
+      });
+      const data = await response.json();
+      if (
+        !response.ok ||
+        data?.status !== "completed" ||
+        data?.channel !== "ssd.put" ||
+        data?.result !== payload.bytes.length
+      ) {
+        throw new Error(data?.error || "Virtual SSD write failed; verify before retry");
+      }
+
+      try {
+        await completePendingAction(id);
+      } catch {
+        throw new Error("SSD write succeeded, but action completion failed. Do not retry automatically.");
+      }
+
+      return jsonResponse(createResult(tool, {
+        status: "completed",
+        pendingActionId: id,
+        channel: "ssd.put",
+        key: payload.key,
+        byteCount: payload.bytes.length,
+        execution: data,
+        timestamp: now(),
+      }));
+    } finally {
+      executingVirtualSsdPuts.delete(id);
+    }
+  } catch (error: any) {
+    return jsonResponse(createErrorResult(tool, error));
+  }
+}
+
 export async function handleSystemToolCommand(message: string) {
+  const ramCommand = message.trim().toUpperCase();
+
+  if (ramCommand.startsWith("VIRTUAL_SSD_PUT_REQUEST:")) {
+    return handleRequestVirtualSsdPut(message);
+  }
+
+  if (ramCommand.startsWith("EXECUTE_VIRTUAL_SSD_PUT:")) {
+    return handleExecuteVirtualSsdPut(message);
+  }
+
+  if (ramCommand.startsWith("VIRTUAL_RAM_WRITE_REQUEST:")) {
+    return handleRequestVirtualRamWrite(message);
+  }
+
+  if (ramCommand.startsWith("EXECUTE_VIRTUAL_RAM_WRITE:")) {
+    return handleExecuteVirtualRamWrite(message);
+  }
   if (message.trim().toUpperCase().startsWith("RUN_AGENT_WORKFLOW:")) {
     return handleAgentWorkflow(message);
   }
@@ -723,6 +1077,10 @@ export function isSystemToolCommand(message: string) {
     upper.startsWith("TASK_PLAN:") ||
     upper.startsWith("CHECK_AWENIA_STATUS") ||
     upper.startsWith("RUN_AUTONOMOUS_TESTS") ||
+    upper.startsWith("VIRTUAL_RAM_WRITE_REQUEST:") ||
+    upper.startsWith("EXECUTE_VIRTUAL_RAM_WRITE:") ||
+    upper.startsWith("VIRTUAL_SSD_PUT_REQUEST:") ||
+    upper.startsWith("EXECUTE_VIRTUAL_SSD_PUT:") ||
     upper === "CHECK_VIRTUAL_COMPUTER" ||
     upper.startsWith("VIRTUAL_COMPUTER_RUN:") ||
     upper.startsWith("CODER_PROPOSAL:") ||

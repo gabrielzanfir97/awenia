@@ -486,10 +486,9 @@ export async function createAutonomousReflection(
   runtimeReflections.unshift(record);
 
   const supabaseResult = await safeInsert("autonomous_reflections", {
-    title,
-    content,
-    recommendation,
-    status: "created",
+    reflection: [title, content].filter((part) => part.trim()).join("\n\n"),
+    detected_weakness: null,
+    suggested_improvement: recommendation.trim() || null,
     created_at: record.created_at,
   });
 
